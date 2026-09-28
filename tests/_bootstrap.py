@@ -52,18 +52,26 @@ def reset_transfers():
 
 
 def call_payable(contract, method_name: str, value: int, *args, **kwargs):
-    """Invoke a payable method as if `value` wei were attached. The value is
-    added to contract.balance before the call and rolled back if the call
-    raises, mirroring an atomic transaction."""
+    """Invoke a payable method as if `value` wei were attached.
+
+    The value is added to contract.balance and is NOT removed if the call
+    raises. This mirrors behavior observed live on GenLayer Studio: when a
+    payable call reverts, contract state is rolled back but the attached GEN
+    still ends up in the contract balance."""
     gl.message.value = u256(value)
     contract.balance = contract.balance + u256(value)
     try:
         return getattr(contract, method_name)(*args, **kwargs)
-    except Exception:
-        contract.balance = contract.balance - u256(value)
-        raise
     finally:
         gl.message.value = u256(0)
+
+
+def settle_transfers(contract):
+    """Apply the offline transfer ledger to contract.balance (the stub's
+    emit_transfer only records transfers) and clear the ledger."""
+    for transfer in gl.evm.transfers:
+        contract.balance = contract.balance - u256(int(transfer["value"]))
+    gl.evm.transfers.clear()
 
 
 def call(contract, method_name: str, *args, **kwargs):

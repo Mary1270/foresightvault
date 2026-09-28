@@ -8,9 +8,12 @@ import json
 import random
 import unittest
 
-from _bootstrap import call, call_payable, gl, make_contract, reset_transfers, set_caller
+from _bootstrap import (
+    call, call_payable, gl, make_contract, reset_transfers, set_caller, settle_transfers,
+)
 from _helpers import (
-    AP_URL, REUTERS_URL, close_resolution_window, create_market, open_resolution_window, resolve,
+    AP_URL, REUTERS_URL, close_resolution_window, close_staking_only, create_market,
+    open_resolution_window, resolve,
 )
 
 OUTCOME_PAGES = {0: "A", 1: "B"}
@@ -30,6 +33,18 @@ class EconomicsFuzzTests(unittest.TestCase):
                 set_caller(who)
                 call_payable(c, "stake", value, mid, rng.randrange(3))
                 taken_in += value
+            if rng.random() < 0.4:
+                # Invalid stake with GEN attached: must be refunded, not lost.
+                bad_value = rng.choice([1, 10**15 - 1, 10**17])
+                bad_index = rng.choice([7, -1, True])
+                call_payable(c, "stake", bad_value, mid, bad_index)
+                taken_in += bad_value
+        if rng.random() < 0.3:
+            late = wallets[0]
+            close_staking_only(c, mid)
+            set_caller(late)
+            call_payable(c, "stake", 10**16, mid, 0)  # after deadline -> refunded
+            taken_in += 10**16
 
         ending = rng.choice(["resolve_A", "resolve_B", "expire"])
         if ending == "expire":
@@ -56,6 +71,13 @@ class EconomicsFuzzTests(unittest.TestCase):
         self.assertEqual(paid_out, taken_in, f"seed {seed} ending {ending}")
         for who in wallets:
             self.assertEqual(c.get_pending_withdrawal(who), "0")
+        settle_transfers(c)
+        accounting = json.loads(c.get_accounting())
+        self.assertEqual(
+            (accounting["contract_balance"], accounting["liabilities"], accounting["unaccounted_surplus"]),
+            ("0", "0", "0"),
+            f"seed {seed}",
+        )
 
     def test_many_random_markets(self):
         for seed in range(300):

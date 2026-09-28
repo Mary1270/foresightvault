@@ -7,64 +7,113 @@ import json
 import unittest
 
 from _bootstrap import (
-    ALICE_ADDRESS, BOB_ADDRESS, CAROL_ADDRESS, Address, call_payable, gl, make_contract, set_caller,
+    ALICE_ADDRESS, BOB_ADDRESS, CAROL_ADDRESS, call_payable, gl, make_contract, reset_transfers,
+    set_caller, settle_transfers, u256,
 )
 from _helpers import close_staking_only, create_market, market
 
 
 class StakeValidationTests(unittest.TestCase):
+    """Invalid stakes with GEN attached must not revert: on GenLayer a
+    reverted payable call keeps the GEN in the contract with no record of
+    the sender (observed live). They are refunded via pending_withdrawals."""
+
     def setUp(self):
         self.c = make_contract()
         self.mid = create_market(self.c)
         set_caller(ALICE_ADDRESS)
 
-    def test_below_minimum_rejected(self):
-        with self.assertRaises(gl.vm.UserError):
-            call_payable(self.c, "stake", int(self.c.MIN_STAKE_WEI) - 1, self.mid, 0)
+    def assertRefunded(self, value, market_id, index, reason_fragment):
+        before_pending = int(self.c.get_pending_withdrawal(ALICE_ADDRESS))
+        result = json.loads(call_payable(self.c, "stake", value, market_id, index))
+        self.assertFalse(result["accepted"])
+        self.assertIn(reason_fragment, result["reason"])
+        self.assertEqual(result["refunded_wei"], str(value))
+        self.assertEqual(int(self.c.get_pending_withdrawal(ALICE_ADDRESS)), before_pending + value)
+        self.assertEqual(len(self.c.positions), 0)
+        self.assertEqual(market(self.c, self.mid)["total_pool"], "0")
 
-    def test_zero_value_rejected(self):
+    def test_zero_value_reverts_because_nothing_to_protect(self):
         with self.assertRaises(gl.vm.UserError):
             call_payable(self.c, "stake", 0, self.mid, 0)
 
+    def test_below_minimum_refunded(self):
+        self.assertRefunded(int(self.c.MIN_STAKE_WEI) - 1, self.mid, 0, "Stake at least")
+
     def test_exact_minimum_accepted(self):
-        call_payable(self.c, "stake", int(self.c.MIN_STAKE_WEI), self.mid, 0)
+        result = json.loads(call_payable(self.c, "stake", int(self.c.MIN_STAKE_WEI), self.mid, 0))
+        self.assertTrue(result["accepted"])
         self.assertEqual(market(self.c, self.mid)["outcome_pools"][0], str(int(self.c.MIN_STAKE_WEI)))
 
-    def test_unknown_market_rejected(self):
-        with self.assertRaises(gl.vm.UserError):
-            call_payable(self.c, "stake", 10**16, "999", 0)
+    def test_unknown_market_refunded(self):
+        self.assertRefunded(10**16, "999", 0, "No market found")
 
-    def test_bool_and_non_int_indexes_rejected(self):
+    def test_index_out_of_range_refunded(self):
+        for index in (-1, 3):
+            self.assertRefunded(10**16, self.mid, index, "outcome_index must be")
+
+    def test_bool_and_non_int_indexes_refunded(self):
         # True would otherwise be stored under key "True" while pools use
         # index 1, making the stake unclaimable and unrefundable.
         for index in (True, False, 1.0, "1", None):
-            with self.assertRaises(gl.vm.UserError):
-                call_payable(self.c, "stake", 10**16, self.mid, index)
-        self.assertEqual(len(self.c.positions), 0)
+            self.assertRefunded(10**16, self.mid, index, "outcome_index must be")
 
-    def test_index_out_of_range_rejected(self):
-        for index in (-1, 3):
-            with self.assertRaises(gl.vm.UserError):
-                call_payable(self.c, "stake", 10**16, self.mid, index)
-
-    def test_after_staking_deadline_rejected(self):
+    def test_after_staking_deadline_refunded(self):
         close_staking_only(self.c, self.mid)
-        with self.assertRaises(gl.vm.UserError):
-            call_payable(self.c, "stake", 10**16, self.mid, 0)
+        self.assertRefunded(10**16, self.mid, 0, "Staking for this market has closed")
 
-    def test_on_settled_market_rejected(self):
+    def test_on_settled_market_refunded(self):
         record = json.loads(self.c.markets[self.mid])
         record["status"] = "resolved"
         self.c.markets[self.mid] = json.dumps(record)
-        with self.assertRaises(gl.vm.UserError):
-            call_payable(self.c, "stake", 10**16, self.mid, 0)
+        self.assertRefunded(10**16, self.mid, 0, "no longer accepting stakes")
 
-    def test_rejected_stake_does_not_change_balance_or_pools(self):
-        before = self.c.balance
-        with self.assertRaises(gl.vm.UserError):
-            call_payable(self.c, "stake", 1, self.mid, 0)
-        self.assertEqual(self.c.balance, before)
-        self.assertEqual(market(self.c, self.mid)["total_pool"], "0")
+    def test_refunded_stake_is_withdrawable_in_full(self):
+        # Reproduces the live finding: 1 GEN attached to a stake that is
+        # rejected (closed staking) must come back to the sender.
+        close_staking_only(self.c, self.mid)
+        call_payable(self.c, "stake", 10**18, self.mid, 0)
+        reset_transfers()
+        self.c.withdraw()
+        self.assertEqual(int(gl.evm.transfers[0]["value"]), 10**18)
+        self.assertEqual(gl.evm.transfers[0]["to"].lower(), ALICE_ADDRESS.lower())
+
+
+class AccountingTests(unittest.TestCase):
+    def setUp(self):
+        self.c = make_contract()
+        self.mid = create_market(self.c)
+        reset_transfers()
+
+    def accounting(self):
+        return {k: int(v) for k, v in json.loads(self.c.get_accounting()).items()}
+
+    def test_accepted_and_refunded_stakes_are_both_liabilities(self):
+        set_caller(ALICE_ADDRESS)
+        call_payable(self.c, "stake", 3 * 10**16, self.mid, 0)   # accepted
+        call_payable(self.c, "stake", 2 * 10**16, self.mid, 9)   # refunded
+        a = self.accounting()
+        self.assertEqual(a["contract_balance"], 5 * 10**16)
+        self.assertEqual(a["liabilities"], 5 * 10**16)
+        self.assertEqual(a["unaccounted_surplus"], 0)
+
+    def test_withdraw_reduces_liabilities_and_balance_together(self):
+        set_caller(ALICE_ADDRESS)
+        call_payable(self.c, "stake", 2 * 10**16, self.mid, 9)   # refunded
+        self.c.withdraw()
+        settle_transfers(self.c)
+        a = self.accounting()
+        self.assertEqual((a["contract_balance"], a["liabilities"], a["unaccounted_surplus"]), (0, 0, 0))
+        self.assertEqual(a["total_withdrawn"], 2 * 10**16)
+
+    def test_gen_from_a_reverted_call_shows_as_surplus_not_liability(self):
+        # A zero-value stake reverts; simulate GEN arriving with a call that
+        # reverted before contract logic ran: it is reported, never owed.
+        set_caller(ALICE_ADDRESS)
+        self.c.balance = self.c.balance + u256(10**18)
+        a = self.accounting()
+        self.assertEqual(a["liabilities"], 0)
+        self.assertEqual(a["unaccounted_surplus"], 10**18)
 
 
 class StakeAccountingTests(unittest.TestCase):
