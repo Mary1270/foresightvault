@@ -1,0 +1,1278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<title>ForesightVault — Outcome Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#FFFFFF;
+    --paper-sunken:#F6F7F3;
+    --line:#E1E4DA;
+    --ink:#141912;
+    --ink-dim:#5C6357;
+    --ink-faint:#93998C;
+    --spruce:#2F6E4E;
+    --spruce-deep:#1F5138;
+    --amber:#D9A441;
+    --clay:#C0654A;
+    --sky:#4C7EA8;
+    --black:#0F120E;
+  }
+  html{ color-scheme:light; }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--spruce-deep);}
+  code{ font-family:'IBM Plex Mono',monospace; }
+
+  header{
+    max-width:1180px;
+    margin:0 auto;
+    padding:44px 20px 26px;
+    border-bottom:1px solid var(--line);
+    position:relative;
+    background:
+      radial-gradient(ellipse 75% 55% at 12% 0%, rgba(217,164,65,.18), transparent 60%),
+      radial-gradient(ellipse 70% 55% at 55% 5%, rgba(47,110,78,.16), transparent 60%),
+      radial-gradient(ellipse 65% 55% at 90% 20%, rgba(76,126,168,.16), transparent 60%);
+  }
+  .eyebrow{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12px;
+    letter-spacing:.14em;
+    color:var(--spruce-deep);
+    margin:0 0 12px;
+  }
+  h1{
+    font-family:'Oswald',sans-serif;
+    font-weight:700;
+    font-size:clamp(28px,4.6vw,44px);
+    line-height:1.06;
+    letter-spacing:.005em;
+    margin:0 0 14px;
+    color:var(--ink);
+  }
+  h1 em{ font-style:normal; color:var(--spruce-deep); }
+  .lede{
+    font-size:16px;
+    line-height:1.6;
+    color:var(--ink-dim);
+    max-width:640px;
+    margin:0 0 6px;
+  }
+  .addr-line{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12px;
+    color:var(--ink-dim);
+    margin-top:16px;
+    padding-top:16px;
+    border-top:1px dashed var(--line);
+  }
+  .addr-line code{ color:var(--spruce-deep); word-break:break-all; }
+  .status-pill{
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:8px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12px;
+    color:var(--ink-dim);
+    border:1px solid var(--line);
+    background:var(--paper);
+    border-radius:999px;
+    padding:10px 16px;
+    margin-top:14px;
+  }
+  .dot{ width:7px; height:7px; border-radius:50%; background:var(--ink-faint); flex-shrink:0; }
+  .dot.on{ background:var(--spruce); box-shadow:0 0 8px var(--spruce); }
+  .status-pill button{
+    background:var(--black);border:1px solid var(--black);color:#fff;
+    font-family:'IBM Plex Mono',monospace;font-size:11.5px;cursor:pointer;
+    padding:7px 14px;border-radius:999px;
+  }
+  .status-pill button:hover{ background:var(--spruce-deep); border-color:var(--spruce-deep); }
+
+  nav.tabs{
+    max-width:1180px;
+    margin:0 auto;
+    padding:14px 20px 0;
+    display:flex;
+    gap:6px;
+    border-bottom:1px solid var(--line);
+  }
+  .tab-link{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12.5px;
+    color:var(--ink-dim);
+    text-decoration:none;
+    padding:10px 14px;
+    border-bottom:2px solid transparent;
+    margin-bottom:-1px;
+  }
+  .tab-link.active{ color:var(--spruce-deep); border-bottom-color:var(--spruce-deep); }
+  .tab-link:hover{ color:var(--ink); }
+
+  main{
+    max-width:1180px;
+    margin:0 auto;
+    padding:28px 20px 80px;
+  }
+  .route{ display:none; }
+  .route.active{ display:block; }
+
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  @media (max-width:920px){ .grid2{ grid-template-columns:1fr; } }
+  .col{ display:flex; flex-direction:column; gap:18px; }
+
+  .panel{
+    background:var(--paper);
+    border:1px solid var(--line);
+    border-left:3px solid var(--spruce);
+    border-radius:10px;
+    padding:22px;
+    box-shadow:0 1px 2px rgba(20,25,18,.04);
+  }
+  .panel h2{
+    font-family:'Oswald',sans-serif;
+    font-size:18px;
+    font-weight:600;
+    margin:0 0 4px;
+    color:var(--ink);
+  }
+  .panel .desc{
+    font-size:13px;
+    color:var(--ink-dim);
+    margin:0 0 16px;
+    line-height:1.5;
+  }
+  label{
+    display:block;
+    font-size:12.5px;
+    color:var(--ink-dim);
+    margin:14px 0 5px;
+  }
+  label:first-of-type{ margin-top:0; }
+  input,textarea,select{
+    width:100%;
+    font-family:'Inter',sans-serif;
+    font-size:14px;
+    padding:9px 11px;
+    border:1px solid var(--line);
+    border-radius:7px;
+    background:var(--paper-sunken);
+    color:var(--ink);
+  }
+  input:focus,textarea:focus,select:focus{
+    outline:2px solid var(--spruce);
+    outline-offset:1px;
+  }
+  textarea{ min-height:64px; resize:vertical; font-family:'IBM Plex Mono',monospace; font-size:13px; }
+  .hint{ font-size:11.5px; color:var(--ink-faint); margin-top:4px; }
+  button.primary{
+    margin-top:16px;
+    width:100%;
+    background:var(--spruce-deep);
+    border:1px solid var(--spruce-deep);
+    color:#fff;
+    font-family:'Oswald',sans-serif;
+    font-size:14px;
+    font-weight:600;
+    letter-spacing:.02em;
+    padding:11px 16px;
+    border-radius:7px;
+    cursor:pointer;
+  }
+  button.primary:hover{ background:var(--black); border-color:var(--black); }
+  button.secondary{
+    margin-top:10px;
+    width:100%;
+    background:transparent;
+    border:1px solid var(--line);
+    color:var(--ink);
+    font-family:'Oswald',sans-serif;
+    font-size:13px;
+    font-weight:600;
+    padding:9px 16px;
+    border-radius:7px;
+    cursor:pointer;
+  }
+  button.secondary:hover{ border-color:var(--spruce-deep); color:var(--spruce-deep); }
+  button.small{
+    width:auto;
+    margin:0;
+    padding:6px 12px;
+    font-size:12px;
+  }
+  .row{ display:flex; gap:8px; align-items:center; }
+  .row > *{ flex:1; }
+  .row button{ flex:0 0 auto; }
+
+  .out{
+    display:none;
+    margin-top:14px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:12px;
+    line-height:1.6;
+    padding:12px 14px;
+    border-radius:7px;
+    white-space:pre-wrap;
+    word-break:break-word;
+  }
+  .out.ok{ display:block; background:#EAF4EC; color:var(--spruce-deep); border:1px solid #C6E2CC; }
+  .out.err{ display:block; background:#FBEBE7; color:#8A3524; border:1px solid #F1C7BB; }
+  .out.info{ display:block; background:var(--paper-sunken); color:var(--ink-dim); border:1px solid var(--line); }
+
+  .badge{
+    display:inline-block;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    padding:3px 9px;
+    border-radius:999px;
+    border:1px solid var(--line);
+    background:var(--paper-sunken);
+    color:var(--ink-dim);
+  }
+  .badge-status-staking{ background:#FEF3DE; color:#8A6417; border-color:#F2DDA8; }
+  .badge-status-resolved{ background:#EAF4EC; color:var(--spruce-deep); border-color:#C6E2CC; }
+  .badge-status-refunding{ background:#EEF3F8; color:var(--sky); border-color:#CFDDEA; }
+  td.quote{ font-size:11.5px; color:var(--ink-dim); max-width:260px; }
+
+  /* ---- Explore ---- */
+  .explore-filters{ display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+  .explore-filters input{ flex:1; min-width:200px; }
+  .explore-list{ display:flex; flex-direction:column; gap:10px; }
+  .explore-card{
+    display:flex; justify-content:space-between; align-items:center; gap:14px;
+    padding:14px 16px; border:1px solid var(--line); border-radius:9px;
+    text-decoration:none; color:var(--ink); background:var(--paper);
+  }
+  .explore-card:hover{ border-color:var(--spruce); }
+  .ec-main{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .ec-question{ font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ec-meta{ font-size:12px; color:var(--ink-dim); }
+  .id-chip{
+    font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-faint);
+    border:1px solid var(--line); border-radius:6px; padding:4px 8px; flex-shrink:0;
+  }
+  .explore-empty{ color:var(--ink-faint); font-size:13px; padding:20px 0; text-align:center; }
+
+  /* ---- Outcome bars ---- */
+  .outcome-row{ margin-bottom:12px; }
+  .outcome-row-head{ display:flex; justify-content:space-between; font-size:13px; margin-bottom:5px; }
+  .outcome-row-label{ font-weight:600; }
+  .outcome-row-amt{ font-family:'IBM Plex Mono',monospace; color:var(--ink-dim); }
+  .outcome-bar-track{ height:8px; background:var(--paper-sunken); border-radius:5px; overflow:hidden; border:1px solid var(--line); }
+  .outcome-bar-fill{ height:100%; background:var(--spruce); }
+  .outcome-row.is-winner .outcome-bar-fill{ background:var(--amber); }
+  .outcome-row.is-winner .outcome-row-label{ color:var(--spruce-deep); }
+
+  .outcome-input-row{ display:flex; gap:8px; margin-bottom:8px; }
+  .outcome-input-row input{ flex:1; }
+
+  /* ---- Evidence table ---- */
+  table.evidence{ width:100%; border-collapse:collapse; margin-top:10px; font-size:12.5px; }
+  table.evidence th,table.evidence td{
+    text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top;
+  }
+  table.evidence th{ color:var(--ink-dim); font-weight:600; font-size:11.5px; }
+  table.evidence td.url{ font-family:'IBM Plex Mono',monospace; font-size:11.5px; word-break:break-all; }
+
+  .hero-status{
+    display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:6px;
+  }
+  .hero-status .value{
+    font-family:'Oswald',sans-serif; font-size:26px; font-weight:700; color:var(--ink);
+  }
+  .field-list{ display:flex; flex-direction:column; gap:6px; font-size:13px; margin:14px 0; }
+  .field-list .fl-row{ display:flex; justify-content:space-between; gap:10px; border-bottom:1px dashed var(--line); padding-bottom:6px; }
+  .field-list .fl-key{ color:var(--ink-dim); }
+  .field-list .fl-val{ font-family:'IBM Plex Mono',monospace; text-align:right; word-break:break-all; }
+
+  footer{
+    max-width:1180px; margin:0 auto; padding:24px 20px 60px;
+    font-size:12px; color:var(--ink-faint); border-top:1px solid var(--line);
+    line-height:1.6;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">GenLayer Intelligent Contract</p>
+  <h1>Foresight<em>Vault</em></h1>
+  <p class="lede">
+    Stake GEN on any outcome of a real-world question. Once the resolution
+    window opens, anyone can trigger multi-source, LLM-verified settlement —
+    and the winners split the pot automatically, on-chain.
+  </p>
+  <p class="addr-line">Contract: <code id="contractAddrText">—</code></p>
+  <div class="status-pill">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">Not connected</span>
+    <button id="connectBtn" type="button">connect wallet</button>
+    <button id="testSessionBtn" type="button">start test session</button>
+  </div>
+  <p class="hint" id="testSessionNote" style="display:none;">
+    Test session uses a freshly generated in-browser keypair (via
+    <code>genlayer-js</code>'s <code>createAccount()</code>) — it has no GEN
+    of its own and is only useful against a local/dev Studio node that funds
+    new accounts. Use "connect wallet" against a real network.
+  </p>
+</header>
+
+<nav class="tabs">
+  <a class="tab-link" data-route="explore" href="#/">Explore</a>
+  <a class="tab-link" data-route="create" href="#/create">Create Market</a>
+  <a class="tab-link" data-route="withdraw" href="#/withdraw">Withdraw &amp; Balances</a>
+</nav>
+
+<main>
+
+  <!-- ================= EXPLORE ================= -->
+  <section class="route" id="route-explore">
+    <div class="panel">
+      <h2>Every market, newest first</h2>
+      <p class="desc">Backed by the contract's paginated <code>list_markets()</code> view — nothing to look up by hand. <span id="exploreTotalNote"></span></p>
+      <div class="explore-filters">
+        <input type="text" id="exploreFilter" placeholder="Filter by id, question, or status…">
+        <button class="secondary small" id="exploreRefresh" type="button">refresh</button>
+      </div>
+      <div class="explore-list" id="exploreList"></div>
+      <button class="secondary" id="exploreMore" type="button" style="display:none;">Load more</button>
+      <div class="out" id="exploreOut"></div>
+    </div>
+  </section>
+
+  <!-- ================= CREATE ================= -->
+  <section class="route" id="route-create">
+    <div class="grid2">
+      <div class="panel">
+        <h2>Create a market</h2>
+        <p class="desc">
+          Not payable — you're not staking by creating this. Anyone (including
+          you) stakes separately, on the market's own page, before the
+          staking deadline.
+        </p>
+
+        <label for="cQuestion">Question</label>
+        <input type="text" id="cQuestion" placeholder="Who will win the mayoral election?">
+
+        <label>Outcomes (2–6, each must be distinct)</label>
+        <div id="cOutcomes"></div>
+        <button class="secondary small" id="cAddOutcome" type="button">+ add outcome</button>
+
+        <label for="cDomains">Required source domains (comma-separated, at least 2, from the allowlist below)</label>
+        <input type="text" id="cDomains" placeholder="reuters.com, apnews.com">
+
+        <label for="cStakingDeadline">Staking closes</label>
+        <input type="datetime-local" id="cStakingDeadline">
+        <p class="hint">30 minutes – 30 days from now. Close staking <em>before</em> the outcome can be known, or late stakers could bet on a known result.</p>
+
+        <label for="cResolutionDeadline">Resolution opens</label>
+        <input type="datetime-local" id="cResolutionDeadline">
+        <p class="hint">5 minutes – 30 days after staking closes. Resolution stays open for 48h after this.</p>
+
+        <button class="primary" id="cSubmit" type="button">Create market</button>
+        <div class="out" id="cOut"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Reputable source allowlist</h2>
+        <p class="desc">Only these domains ever count as corroborating evidence (<code>REPUTABLE_NEWS_DOMAINS</code>):</p>
+        <p style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; line-height:2; color:var(--ink-dim);">
+          reuters.com · apnews.com · bbc.com · npr.org · theguardian.com ·
+          nytimes.com · bloomberg.com · cnbc.com · aljazeera.com ·
+          politico.com · axios.com · cnn.com · washingtonpost.com · wsj.com
+        </p>
+        <p class="desc" style="margin-top:16px;">
+          A specific section of a domain can be pinned by committing
+          <code>domain/path</code> (e.g. <code>reuters.com/world</code>)
+          instead of the bare domain.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= MARKET ================= -->
+  <section class="route" id="route-market">
+    <div class="grid2">
+      <div class="col">
+        <div class="panel" id="marketHeroPanel">
+          <h2 id="marketQuestion">—</h2>
+          <div class="hero-status">
+            <span class="badge" id="marketStatusBadge">—</span>
+            <span class="value" id="marketPoolValue">—</span>
+          </div>
+          <div class="field-list" id="marketFields"></div>
+          <button class="secondary small" id="marketRefresh" type="button">refresh</button>
+        </div>
+
+        <div class="panel">
+          <h2>Outcome pools</h2>
+          <p class="desc">Share of the total pot currently staked on each outcome.</p>
+          <div id="marketOutcomeBars"></div>
+        </div>
+
+        <div class="panel" id="marketEvidencePanel" style="display:none;">
+          <h2>Evidence trail</h2>
+          <p class="desc">Per-source classification from the most recent <code>resolve_market</code> attempt.</p>
+          <div style="overflow-x:auto;">
+            <table class="evidence" id="marketEvidenceTable"></table>
+          </div>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="panel">
+          <h2>My position</h2>
+          <p class="desc">The connected wallet's stakes in this market and what it can claim.</p>
+          <div class="field-list" id="myStakeFields"></div>
+          <button class="secondary small" id="myStakeRefresh" type="button">refresh</button>
+          <button class="primary" id="claimSubmit" type="button" style="display:none;">Claim</button>
+          <button class="secondary" id="claimWithdrawSubmit" type="button" style="display:none;">Withdraw to my wallet</button>
+          <div class="out" id="claimOut"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Stake GEN</h2>
+          <label for="sOutcome">Outcome</label>
+          <select id="sOutcome"></select>
+          <label for="sAmount">Amount (GEN)</label>
+          <input type="text" id="sAmount" placeholder="0.01">
+          <button class="primary" id="sSubmit" type="button">Stake</button>
+          <div class="out" id="sOut"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Resolve</h2>
+          <p class="desc">
+            Opens at the resolution deadline and stays open for 48 hours.
+            Submit 2–6 https article URLs (one per line, one per domain) that
+            report the <em>confirmed</em> outcome, covering every required
+            domain. Validators re-check every source independently; polls,
+            projections and pages that don't literally state the outcome
+            are ignored.
+          </p>
+          <label for="rUrls">Source URLs</label>
+          <textarea id="rUrls" placeholder="https://reuters.com/...&#10;https://apnews.com/..."></textarea>
+          <button class="primary" id="rSubmit" type="button">Resolve market</button>
+          <div class="out" id="rOut"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Expire</h2>
+          <p class="desc">
+            If the resolution window closes without a decisive result, anyone
+            can switch the market to refunds. Every staker then claims back
+            exactly what they staked.
+          </p>
+          <button class="secondary" id="eSubmit" type="button">Expire market</button>
+          <div class="out" id="eOut"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= WITHDRAW ================= -->
+  <section class="route" id="route-withdraw">
+    <div class="grid2">
+      <div class="panel">
+        <h2>Withdraw</h2>
+        <p class="desc">Sends your entire credited balance (from claims) to your connected wallet. Claim each settled market from its own page first.</p>
+        <div class="field-list" id="withdrawFields"></div>
+        <button class="secondary small" id="withdrawRefresh" type="button">refresh my balance</button>
+        <button class="primary" id="withdrawSubmit" type="button">Withdraw</button>
+        <div class="out" id="withdrawOut"></div>
+      </div>
+
+      <div class="col">
+        <div class="panel">
+          <h2>Check a stake</h2>
+          <p class="desc">Look up any (market id, address) pair's per-outcome stake.</p>
+          <label for="lookupMarketId">Market id</label>
+          <input type="text" id="lookupMarketId" placeholder="0">
+          <label for="lookupAddr">Address</label>
+          <input type="text" id="lookupAddr" placeholder="0x…">
+          <button class="primary" id="lookupBtn" type="button">Look up</button>
+          <div class="out" id="lookupOut"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Contract balance</h2>
+          <p class="desc">Total GEN currently custodied by this contract on-chain.</p>
+          <button class="secondary" id="balanceBtn" type="button">Check balance</button>
+          <div class="out" id="balanceOut"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  ForesightVault dApp — a minimal reference frontend built with <code>genlayer-js</code>.
+  Every dynamic value on this page is written with <code>textContent</code>/<code>createElement</code> only —
+  <code>innerHTML</code> is never used, so data returned from the contract or fetched off-chain can never be
+  interpreted as HTML/script by this page.
+</footer>
+
+<script type="module">
+import { createClient, createAccount } from "https://esm.sh/genlayer-js@latest";
+import { studionet } from "https://esm.sh/genlayer-js@latest/chains";
+
+// ------------------------------------------------------------------
+// EDIT THIS after you deploy ForesightVault's contract.py — paste the
+// deployed address here (from the Studio/explorer "Deployed at" field).
+// ------------------------------------------------------------------
+const CONTRACT_ADDRESS = "0x578c7449B5D7DC6509730E38389A11503D9b735a";
+
+document.getElementById('contractAddrText').textContent = CONTRACT_ADDRESS;
+
+let client = null;
+let account = null;
+
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const connectBtn = document.getElementById('connectBtn');
+const testSessionBtn = document.getElementById('testSessionBtn');
+const testSessionNote = document.getElementById('testSessionNote');
+
+function setStatus(connected, label){
+  statusDot.classList.toggle('on', connected);
+  statusText.textContent = label;
+}
+
+async function connectWallet(){
+  if (!window.ethereum) {
+    setStatus(false, 'No injected wallet found — install a wallet, or use "start test session" instead');
+    return;
+  }
+  try {
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    account = accounts[0];
+    client = createClient({ chain: studionet, account });
+    setStatus(true, `Connected · ${account.slice(0,6)}…${account.slice(-4)}`);
+    connectBtn.textContent = 'reconnect';
+    testSessionNote.style.display = 'none';
+    refreshMyStake();
+  } catch (err) {
+    setStatus(false, 'Connection rejected');
+  }
+}
+connectBtn.addEventListener('click', connectWallet);
+
+function startTestSession(){
+  const generated = createAccount();
+  account = generated.address ?? generated;
+  client = createClient({ chain: studionet, account: generated });
+  setStatus(true, `Connected (test session) · ${account.slice(0,6)}…${account.slice(-4)}`);
+  testSessionBtn.textContent = 'new test session';
+  testSessionNote.style.display = 'block';
+  refreshMyStake();
+}
+testSessionBtn.addEventListener('click', startTestSession);
+
+// Read-only client, usable even without a wallet connection.
+const readClient = createClient({ chain: studionet });
+
+// ------------------------------------------------------------------
+// DOM-safety helpers. Every dynamic value on this page goes through
+// one of these — textContent for plain text, createElement for
+// structure. innerHTML is never used anywhere in this file.
+// ------------------------------------------------------------------
+function clearChildren(node){
+  while (node.firstChild) node.removeChild(node.firstChild);
+}
+
+function makeEl(tag, opts, children){
+  const node = document.createElement(tag);
+  if (opts) {
+    if (opts.className) node.className = opts.className;
+    if (opts.text !== undefined) node.textContent = opts.text;
+  }
+  if (children) {
+    for (const child of children) node.appendChild(child);
+  }
+  return node;
+}
+
+function showOut(el, text, kind){
+  el.style.display = 'block';
+  el.className = 'out' + (kind ? ' ' + kind : '');
+  el.textContent = text;
+}
+
+function fieldRow(key, value){
+  return makeEl('div', { className: 'fl-row' }, [
+    makeEl('span', { className: 'fl-key', text: key }),
+    makeEl('span', { className: 'fl-val', text: value }),
+  ]);
+}
+
+/**
+ * Normalize whatever readContract returns (normally the decoded
+ * value itself; a receipt-shaped object is tolerated defensively).
+ */
+function readValue(v){
+  if (v && typeof v === 'object' && v.consensus_data) return extractReturnValue(v);
+  return v;
+}
+
+/** Same as readValue, but parses JSON strings into objects/arrays. */
+function readJson(v, fallback){
+  const x = readValue(v);
+  if (x === null || x === undefined || x === '') return fallback;
+  if (typeof x === 'string') return JSON.parse(x);
+  return x;
+}
+
+function requireClient(out){
+  if (!client) {
+    showOut(out, 'Connect a wallet first (or start a test session).', 'err');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Send a write transaction and wait for it to finalize.
+ * `client.writeContract` only returns the transaction HASH - the
+ * method's return value lives in the finalized receipt, so every write
+ * on this page goes through this one helper instead of reading the
+ * hash as if it were a result.
+ */
+async function sendTx(out, functionName, args, value, pollOpts){
+  const txHash = await client.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName,
+    args,
+    value: value ?? 0n,
+  });
+  showOut(out, `Transaction sent: ${txHash}\nWaiting for finalization…`, 'info');
+  const receipt = await client.waitForTransactionReceipt({
+    hash: txHash,
+    status: 'FINALIZED',
+    interval: pollOpts?.interval ?? 4000,
+    retries: pollOpts?.retries ?? 30,
+  });
+  return { txHash, receipt, result: extractReturnValue(receipt) };
+}
+
+function describeTxError(err){
+  const message = err?.message || String(err);
+  if (/timed out/i.test(message)) {
+    return message + '\n\nThe browser stopped waiting, but the transaction may still finalize on-chain. Wait a bit, then refresh this page.';
+  }
+  return message;
+}
+
+/**
+ * The contract keeps status "staking" until a market is resolved or
+ * expired, even after staking has closed. For display, derive the
+ * phase a user actually cares about from the stored timestamps.
+ */
+function marketPhase(record){
+  if (record.status === 'resolved') return 'resolved';
+  if (record.status === 'refunding') {
+    return record.refund_reason === 'no_winning_stakers' ? 'refunding (no winning stakers)' : 'refunding (expired)';
+  }
+  if (record.status !== 'staking') return String(record.status);
+  const now = Date.now();
+  if (now < Date.parse(record.staking_deadline)) return 'staking open';
+  if (now < Date.parse(record.resolution_deadline)) return 'staking closed';
+  if (now <= Date.parse(record.resolution_window_closes_at)) return 'awaiting resolution';
+  return 'expirable';
+}
+
+/**
+ * Extract the contract method's actual return value from a GenLayer
+ * transaction receipt. The leader's decoded return value is nested at
+ * receipt.consensus_data.leader_receipt[0].result.payload.readable as
+ * a JSON-encoded string. This unwraps that nesting generically.
+ */
+function extractReturnValue(receipt){
+  const payload = receipt?.consensus_data?.leader_receipt?.[0]?.result?.payload?.readable;
+  if (payload === undefined) return null;
+  let value = payload;
+  for (let i = 0; i < 3; i++) {
+    if (typeof value !== 'string') break;
+    const trimmed = value.trim();
+    const looksLikeJson = trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('"');
+    if (!looksLikeJson) break;
+    try { value = JSON.parse(value); } catch (e) { break; }
+  }
+  return value;
+}
+
+// ------------------------------------------------------------------
+// GEN <-> wei helpers. BigInt throughout — never floating point.
+// ------------------------------------------------------------------
+const WEI_PER_GEN = 1000000000000000000n;
+
+function genToWei(genStr){
+  const trimmed = String(genStr).trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split('.');
+  if (parts.length > 2) return null;
+  const whole = parts[0] || '0';
+  let frac = parts[1] || '';
+  if (!/^\d+$/.test(whole) || (frac && !/^\d+$/.test(frac))) return null;
+  if (frac.length > 18) return null;
+  frac = frac.padEnd(18, '0');
+  try {
+    return BigInt(whole) * WEI_PER_GEN + BigInt(frac || '0');
+  } catch (e) {
+    return null;
+  }
+}
+
+function weiToGenString(weiValue){
+  let wei;
+  try { wei = BigInt(weiValue); } catch (e) { return String(weiValue); }
+  const whole = wei / WEI_PER_GEN;
+  const frac = (wei % WEI_PER_GEN).toString().padStart(18, '0').replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : whole.toString();
+}
+
+function localInputToIsoUtc(localValue){
+  const d = new Date(localValue);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function defaultLocalValue(hoursFromNow){
+  const future = new Date(Date.now() + hoursFromNow * 3600000);
+  const tzOffsetMs = future.getTimezoneOffset() * 60000;
+  const local = new Date(future.getTime() - tzOffsetMs);
+  return local.toISOString().slice(0, 16);
+}
+document.getElementById('cStakingDeadline').value = defaultLocalValue(3);
+document.getElementById('cResolutionDeadline').value = defaultLocalValue(27);
+
+function parseCommaList(raw){
+  return raw.split(',').map(s => s.trim()).filter(Boolean);
+}
+function parseLineList(raw){
+  return raw.split('\n').map(s => s.trim()).filter(Boolean);
+}
+
+// ==================================================================
+// ROUTER — real client-side, hash-based routing between four pages
+// (#/ explore, #/create, #/market/<id>, #/withdraw). Navigating
+// between them never reloads the page; the URL itself is shareable
+// and bookmarkable, and the browser's own back/forward buttons work
+// via the native `hashchange` event.
+// ==================================================================
+let currentMarketId = null;
+
+function parseRoute(){
+  const hash = location.hash.replace(/^#\/?/, '');
+  const parts = hash.split('/').filter(Boolean);
+  if (parts.length === 0) return { name: 'explore' };
+  if (parts[0] === 'create') return { name: 'create' };
+  if (parts[0] === 'withdraw') return { name: 'withdraw' };
+  if (parts[0] === 'market' && parts[1]) return { name: 'market', id: parts[1] };
+  return { name: 'explore' };
+}
+
+function router(){
+  const route = parseRoute();
+
+  document.querySelectorAll('.route').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-link').forEach(el => el.classList.remove('active'));
+
+  const activeRouteEl = document.getElementById('route-' + route.name);
+  if (activeRouteEl) activeRouteEl.classList.add('active');
+  const navName = route.name === 'market' ? 'explore' : route.name;
+  const activeNavEl = document.querySelector(`.tab-link[data-route="${navName}"]`);
+  if (activeNavEl) activeNavEl.classList.add('active');
+
+  if (route.name === 'explore') {
+    loadExplore();
+  } else if (route.name === 'market') {
+    loadMarketRoute(route.id);
+  }
+}
+window.addEventListener('hashchange', router);
+window.addEventListener('DOMContentLoaded', router);
+
+// ------------------------------------------------------------------
+// EXPLORE — browse every market without needing to already know an
+// id. Backed by the contract's list_markets() view.
+// ------------------------------------------------------------------
+let exploreCache = [];
+
+function renderExploreList(items){
+  const list = document.getElementById('exploreList');
+  clearChildren(list);
+  if (!items.length) {
+    list.appendChild(makeEl('p', { className: 'explore-empty', text: 'No markets match.' }));
+    return;
+  }
+  for (const item of items) {
+    const questionEl = makeEl('span', { className: 'ec-question', text: item.question || '—' });
+    const statusBadge = makeEl('span', {
+      className: 'badge badge-status-' + (item.status || ''),
+      text: marketPhase(item),
+    });
+    const poolEl = makeEl('span', {
+      className: 'ec-meta',
+      text: item.total_pool ? `${weiToGenString(item.total_pool)} GEN pooled` : '0 GEN pooled',
+    });
+    const main = makeEl('div', { className: 'ec-main' }, [questionEl, statusBadge, poolEl]);
+    const idChip = makeEl('span', { className: 'id-chip', text: '#' + item.market_id });
+
+    const card = document.createElement('a');
+    card.className = 'explore-card';
+    card.href = '#/market/' + encodeURIComponent(item.market_id);
+    card.appendChild(main);
+    card.appendChild(idChip);
+    list.appendChild(card);
+  }
+}
+
+function applyExploreFilter(){
+  const q = document.getElementById('exploreFilter').value.trim().toLowerCase();
+  if (!q) { renderExploreList(exploreCache); return; }
+  const filtered = exploreCache.filter(item =>
+    String(item.market_id).toLowerCase().includes(q) ||
+    (item.question || '').toLowerCase().includes(q) ||
+    (item.status || '').toLowerCase().includes(q)
+  );
+  renderExploreList(filtered);
+}
+document.getElementById('exploreFilter').addEventListener('input', applyExploreFilter);
+document.getElementById('exploreRefresh').addEventListener('click', () => loadExplore());
+document.getElementById('exploreMore').addEventListener('click', () => loadExplore(true));
+
+const PAGE_SIZE = 25;
+let exploreTotal = 0;
+
+async function loadExplore(append){
+  const out = document.getElementById('exploreOut');
+  const offset = append ? exploreCache.length : 0;
+  try {
+    const receipt = await readClient.readContract({
+      address: CONTRACT_ADDRESS,
+      functionName: 'list_markets',
+      args: [offset, PAGE_SIZE],
+    });
+    const page = readJson(receipt, { total: 0, items: [] });
+    exploreTotal = Number(page.total || 0);
+    exploreCache = append ? exploreCache.concat(page.items || []) : (page.items || []);
+    document.getElementById('exploreTotalNote').textContent = `(${exploreTotal} total)`;
+    document.getElementById('exploreMore').style.display = exploreCache.length < exploreTotal ? 'block' : 'none';
+    applyExploreFilter();
+    out.style.display = 'none';
+  } catch (err) {
+    showOut(out, 'Could not load markets: ' + (err?.message || err), 'err');
+  }
+}
+
+// ------------------------------------------------------------------
+// CREATE
+// ------------------------------------------------------------------
+const outcomesContainer = document.getElementById('cOutcomes');
+
+function addOutcomeInput(value){
+  const row = makeEl('div', { className: 'outcome-input-row' });
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Outcome label';
+  input.value = value || '';
+  const removeBtn = makeEl('button', { className: 'secondary small', text: '−' });
+  removeBtn.type = 'button';
+  removeBtn.addEventListener('click', () => {
+    if (outcomesContainer.children.length > 2) row.remove();
+  });
+  row.appendChild(input);
+  row.appendChild(removeBtn);
+  outcomesContainer.appendChild(row);
+}
+addOutcomeInput('');
+addOutcomeInput('');
+document.getElementById('cAddOutcome').addEventListener('click', () => {
+  if (outcomesContainer.children.length < 6) addOutcomeInput('');
+});
+
+function collectOutcomes(){
+  return Array.from(outcomesContainer.querySelectorAll('input'))
+    .map(inp => inp.value.trim())
+    .filter(Boolean);
+}
+
+document.getElementById('cSubmit').addEventListener('click', async () => {
+  const out = document.getElementById('cOut');
+  if (!requireClient(out)) return;
+
+  const question = document.getElementById('cQuestion').value.trim();
+  const outcomes = collectOutcomes();
+  const domains = parseCommaList(document.getElementById('cDomains').value);
+  const stakingIso = localInputToIsoUtc(document.getElementById('cStakingDeadline').value);
+  const resolutionIso = localInputToIsoUtc(document.getElementById('cResolutionDeadline').value);
+
+  if (!question) { showOut(out, 'Question is required.', 'err'); return; }
+  if (outcomes.length < 2) { showOut(out, 'At least 2 outcomes are required.', 'err'); return; }
+  if (domains.length < 2) { showOut(out, 'At least 2 required source domains are needed.', 'err'); return; }
+  if (!stakingIso || !resolutionIso) { showOut(out, 'Invalid date/time.', 'err'); return; }
+
+  showOut(out, 'Submitting transaction…', 'info');
+  try {
+    const { txHash, result } = await sendTx(
+      out, 'create_market', [question, outcomes, domains, stakingIso, resolutionIso]
+    );
+    if (result !== null && result !== undefined) {
+      showOut(out, `Created market #${result}.\n\nTx: ${txHash}`, 'ok');
+      location.hash = '#/market/' + encodeURIComponent(String(result));
+    } else {
+      showOut(out, `Finalized, but the market id could not be detected (the call may have been rejected). Check Explore.\n\nTx: ${txHash}`, 'err');
+    }
+  } catch (err) {
+    showOut(out, 'Create failed: ' + describeTxError(err), 'err');
+  }
+});
+
+// ------------------------------------------------------------------
+// MARKET — a single market's own page.
+// ------------------------------------------------------------------
+let currentMarketRecord = null;
+
+async function loadMarketRoute(id){
+  currentMarketId = id;
+  await refreshMarket();
+  await refreshMyStake();
+}
+
+document.getElementById('marketRefresh').addEventListener('click', refreshMarket);
+
+async function fetchMarket(id){
+  const receipt = await readClient.readContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'get_market',
+    args: [id],
+  });
+  return readJson(receipt, null);
+}
+
+function renderMarket(record){
+  currentMarketRecord = record;
+
+  document.getElementById('marketQuestion').textContent = record.question;
+  const statusBadge = document.getElementById('marketStatusBadge');
+  statusBadge.textContent = marketPhase(record);
+  statusBadge.className = 'badge badge-status-' + record.status;
+  document.getElementById('marketPoolValue').textContent = weiToGenString(record.total_pool) + ' GEN pooled';
+
+  const fields = document.getElementById('marketFields');
+  clearChildren(fields);
+  fields.appendChild(fieldRow('Market id', record.market_id));
+  fields.appendChild(fieldRow('Staking closes', record.staking_deadline));
+  fields.appendChild(fieldRow('Resolution opens', record.resolution_deadline));
+  fields.appendChild(fieldRow('Resolution window closes', record.resolution_window_closes_at));
+  if (record.final_classification) {
+    fields.appendChild(fieldRow('Last result', record.final_classification));
+  }
+  if (record.locked_source_urls) {
+    fields.appendChild(fieldRow('Locked sources', record.locked_source_urls.join('\n')));
+  }
+  fields.appendChild(fieldRow('Resolution attempts', String(record.resolution_attempts)));
+
+  const bars = document.getElementById('marketOutcomeBars');
+  clearChildren(bars);
+  const total = BigInt(record.total_pool || '0');
+  record.outcomes.forEach((label, idx) => {
+    const amount = BigInt(record.outcome_pools[idx] || '0');
+    const pct = total > 0n ? Number((amount * 1000n) / total) / 10 : 0;
+    const rowClass = 'outcome-row' + (record.winning_outcome_index === idx ? ' is-winner' : '');
+    const stakers = (record.outcome_staker_counts || [])[idx] || 0;
+    const head = makeEl('div', { className: 'outcome-row-head' }, [
+      makeEl('span', { className: 'outcome-row-label', text: `${label} · ${stakers} staker${stakers === 1 ? '' : 's'}` }),
+      makeEl('span', { className: 'outcome-row-amt', text: `${weiToGenString(amount)} GEN (${pct}%)` }),
+    ]);
+    const fill = makeEl('div', { className: 'outcome-bar-fill' });
+    fill.style.width = pct + '%';
+    const track = makeEl('div', { className: 'outcome-bar-track' }, [fill]);
+    bars.appendChild(makeEl('div', { className: rowClass }, [head, track]));
+  });
+
+  const sSelect = document.getElementById('sOutcome');
+  clearChildren(sSelect);
+  record.outcomes.forEach((label, idx) => {
+    const opt = document.createElement('option');
+    opt.value = String(idx);
+    opt.textContent = `${idx}: ${label}`;
+    sSelect.appendChild(opt);
+  });
+
+  const evidencePanel = document.getElementById('marketEvidencePanel');
+  const evidenceTable = document.getElementById('marketEvidenceTable');
+  if (record.records && record.records.length) {
+    evidencePanel.style.display = 'block';
+    clearChildren(evidenceTable);
+    const headRow = makeEl('tr', {}, [
+      makeEl('th', { text: 'URL' }),
+      makeEl('th', { text: 'Fetch' }),
+      makeEl('th', { text: 'Quality' }),
+      makeEl('th', { text: 'Matched outcome' }),
+      makeEl('th', { text: 'Quoted evidence' }),
+    ]);
+    evidenceTable.appendChild(headRow);
+    for (const rec of record.records) {
+      const matched = rec.matched_outcome_index !== null && rec.matched_outcome_index !== undefined
+        ? record.outcomes[rec.matched_outcome_index] : '—';
+      const tr = makeEl('tr', {}, [
+        makeEl('td', { className: 'url', text: rec.url }),
+        makeEl('td', { text: rec.fetch_status }),
+        makeEl('td', { text: rec.quality_flag }),
+        makeEl('td', { text: matched }),
+        makeEl('td', { className: 'quote', text: rec.quote || '—' }),
+      ]);
+      evidenceTable.appendChild(tr);
+    }
+  } else {
+    evidencePanel.style.display = 'none';
+  }
+}
+
+async function refreshMarket(){
+  if (!currentMarketId) return;
+  try {
+    const record = await fetchMarket(currentMarketId);
+    renderMarket(record);
+  } catch (err) {
+    document.getElementById('marketQuestion').textContent = 'Not found';
+  }
+}
+
+// -- Stake --
+document.getElementById('sSubmit').addEventListener('click', async () => {
+  const out = document.getElementById('sOut');
+  if (!requireClient(out)) return;
+  if (!currentMarketId) return;
+
+  const outcomeIndex = parseInt(document.getElementById('sOutcome').value, 10);
+  const wei = genToWei(document.getElementById('sAmount').value);
+  if (wei === null || wei <= 0n) { showOut(out, 'Enter a valid GEN amount.', 'err'); return; }
+
+  showOut(out, 'Submitting transaction…', 'info');
+  try {
+    const { txHash } = await sendTx(out, 'stake', [currentMarketId, outcomeIndex], wei);
+    showOut(out, `Stake finalized.\n\nTx: ${txHash}`, 'ok');
+    await refreshMarket();
+    await refreshMyStake();
+  } catch (err) {
+    showOut(out, 'Stake failed: ' + describeTxError(err), 'err');
+  }
+});
+
+// -- My stake --
+document.getElementById('myStakeRefresh').addEventListener('click', refreshMyStake);
+
+async function refreshMyStake(){
+  const fields = document.getElementById('myStakeFields');
+  const claimBtn = document.getElementById('claimSubmit');
+  const withdrawBtn = document.getElementById('claimWithdrawSubmit');
+  clearChildren(fields);
+  claimBtn.style.display = 'none';
+  withdrawBtn.style.display = 'none';
+  if (!account || !currentMarketId || !currentMarketRecord) {
+    fields.appendChild(fieldRow('Status', account ? 'Open a market first' : 'Connect a wallet first'));
+    return;
+  }
+  try {
+    const [stakeRes, claimableRes, claimedRes, pendingRes] = await Promise.all([
+      readClient.readContract({ address: CONTRACT_ADDRESS, functionName: 'get_stake', args: [currentMarketId, account] }),
+      readClient.readContract({ address: CONTRACT_ADDRESS, functionName: 'get_claimable', args: [currentMarketId, account] }),
+      readClient.readContract({ address: CONTRACT_ADDRESS, functionName: 'has_claimed', args: [currentMarketId, account] }),
+      readClient.readContract({ address: CONTRACT_ADDRESS, functionName: 'get_pending_withdrawal', args: [account] }),
+    ]);
+    const stakes = readJson(stakeRes, {});
+    if (Object.keys(stakes).length === 0) {
+      fields.appendChild(fieldRow('Your stake', 'None yet'));
+    }
+    for (const [idx, amount] of Object.entries(stakes)) {
+      const label = currentMarketRecord.outcomes[Number(idx)] || ('Outcome ' + idx);
+      fields.appendChild(fieldRow(label, weiToGenString(amount) + ' GEN'));
+    }
+    const claimable = BigInt(readValue(claimableRes) || '0');
+    const claimed = readValue(claimedRes) === true || readValue(claimedRes) === 'true';
+    const pending = BigInt(readValue(pendingRes) || '0');
+    if (claimed) {
+      fields.appendChild(fieldRow('Settlement', 'Claimed'));
+    } else if (claimable > 0n) {
+      fields.appendChild(fieldRow('Claimable now', weiToGenString(claimable) + ' GEN'));
+      claimBtn.textContent = `Claim ${weiToGenString(claimable)} GEN`;
+      claimBtn.style.display = 'block';
+    }
+    if (pending > 0n) {
+      fields.appendChild(fieldRow('Ready to withdraw', weiToGenString(pending) + ' GEN'));
+      withdrawBtn.style.display = 'block';
+    }
+  } catch (err) {
+    fields.appendChild(fieldRow('Status', 'Could not load'));
+  }
+}
+
+document.getElementById('claimSubmit').addEventListener('click', async () => {
+  const out = document.getElementById('claimOut');
+  if (!requireClient(out) || !currentMarketId) return;
+  showOut(out, 'Submitting transaction…', 'info');
+  try {
+    const { txHash, result } = await sendTx(out, 'claim', [currentMarketId]);
+    const amount = result !== null && result !== undefined ? `${weiToGenString(result)} GEN credited` : 'Finalized';
+    showOut(out, `${amount}. Withdraw it to your wallet below.\n\nTx: ${txHash}`, 'ok');
+  } catch (err) {
+    showOut(out, 'Claim failed: ' + describeTxError(err), 'err');
+  }
+  await refreshMyStake();
+});
+
+document.getElementById('claimWithdrawSubmit').addEventListener('click', async () => {
+  const out = document.getElementById('claimOut');
+  if (!requireClient(out)) return;
+  showOut(out, 'Submitting transaction…', 'info');
+  try {
+    const { txHash, result } = await sendTx(out, 'withdraw', []);
+    showOut(out, `${result || 'Finalized.'}\n\nTx: ${txHash}`, 'ok');
+  } catch (err) {
+    showOut(out, 'Withdraw failed: ' + describeTxError(err), 'err');
+  }
+  await refreshMyStake();
+});
+
+// -- Resolve --
+document.getElementById('rSubmit').addEventListener('click', async () => {
+  const out = document.getElementById('rOut');
+  if (!requireClient(out)) return;
+  if (!currentMarketId) return;
+
+  const urls = parseLineList(document.getElementById('rUrls').value);
+  if (urls.length < 2) { showOut(out, 'At least 2 source URLs are required.', 'err'); return; }
+
+  showOut(out, 'Submitting transaction — this runs the full multi-source pipeline and may take a while…', 'info');
+  try {
+    const { txHash, result } = await sendTx(
+      out, 'resolve_market', [currentMarketId, urls], 0n, { interval: 5000, retries: 90 }
+    );
+    let record = result;
+    if (typeof record === 'string') { try { record = JSON.parse(record); } catch (e) { record = null; } }
+    if (record && record.final_classification) {
+      const note = record.status === 'staking'
+        ? 'No decisive result yet (not enough independent, confirmed, quoted sources agree). You can retry while the window is open.'
+        : `Status: ${marketPhase(record)}. Stakers can now claim on this page.`;
+      showOut(out, `Result: ${record.final_classification}\n${note}\n\nTx: ${txHash}`, 'ok');
+    } else {
+      showOut(out, `Finalized — refresh the market to see the outcome.\n\nTx: ${txHash}`, 'info');
+    }
+    await refreshMarket();
+    await refreshMyStake();
+  } catch (err) {
+    showOut(out, 'Resolve failed: ' + describeTxError(err), 'err');
+  }
+});
+
+// -- Expire --
+document.getElementById('eSubmit').addEventListener('click', async () => {
+  const out = document.getElementById('eOut');
+  if (!requireClient(out)) return;
+  if (!currentMarketId) return;
+
+  showOut(out, 'Submitting transaction…', 'info');
+  try {
+    const { txHash } = await sendTx(out, 'expire_market', [currentMarketId]);
+    showOut(out, `Finalized. The market is now refunding: every staker can claim their full stake back from this page.\n\nTx: ${txHash}`, 'ok');
+    await refreshMarket();
+  } catch (err) {
+    showOut(out, 'Expire failed: ' + describeTxError(err), 'err');
+  }
+});
+
+// ------------------------------------------------------------------
+// WITHDRAW & BALANCES
+// ------------------------------------------------------------------
+document.getElementById('withdrawRefresh').addEventListener('click', refreshWithdrawFields);
+
+async function refreshWithdrawFields(){
+  const fields = document.getElementById('withdrawFields');
+  clearChildren(fields);
+  if (!account) {
+    fields.appendChild(fieldRow('Status', 'Connect a wallet first'));
+    return;
+  }
+  try {
+    const receipt = await readClient.readContract({
+      address: CONTRACT_ADDRESS,
+      functionName: 'get_pending_withdrawal',
+      args: [account],
+    });
+    fields.appendChild(fieldRow('Your withdrawable balance', weiToGenString(readValue(receipt)) + ' GEN'));
+  } catch (err) {
+    fields.appendChild(fieldRow('Status', 'Could not load'));
+  }
+}
+
+document.getElementById('withdrawSubmit').addEventListener('click', async () => {
+  const out = document.getElementById('withdrawOut');
+  if (!requireClient(out)) return;
+  showOut(out, 'Submitting transaction…', 'info');
+  try {
+    const { txHash, result } = await sendTx(out, 'withdraw', []);
+    showOut(out, `${result || 'Finalized.'}\n\nTx: ${txHash}`, 'ok');
+    await refreshWithdrawFields();
+  } catch (err) {
+    showOut(out, 'Withdraw failed: ' + describeTxError(err), 'err');
+  }
+});
+
+document.getElementById('lookupBtn').addEventListener('click', async () => {
+  const out = document.getElementById('lookupOut');
+  const marketId = document.getElementById('lookupMarketId').value.trim();
+  const addr = document.getElementById('lookupAddr').value.trim();
+  if (!marketId || !addr) { showOut(out, 'Both fields are required.', 'err'); return; }
+  try {
+    const [marketReceipt, stakeReceipt] = await Promise.all([
+      readClient.readContract({ address: CONTRACT_ADDRESS, functionName: 'get_market', args: [marketId] }),
+      readClient.readContract({ address: CONTRACT_ADDRESS, functionName: 'get_stake', args: [marketId, addr] }),
+    ]);
+    const market = readJson(marketReceipt, null);
+    const stakes = readJson(stakeReceipt, {});
+    if (Object.keys(stakes).length === 0) {
+      showOut(out, 'No stake found for this address in this market.', 'info');
+      return;
+    }
+    const lines = Object.entries(stakes).map(([idx, amount]) =>
+      `${market.outcomes[Number(idx)]}: ${weiToGenString(amount)} GEN`
+    );
+    showOut(out, lines.join('\n'), 'ok');
+  } catch (err) {
+    showOut(out, 'Lookup failed: ' + (err?.message || err), 'err');
+  }
+});
+
+document.getElementById('balanceBtn').addEventListener('click', async () => {
+  const out = document.getElementById('balanceOut');
+  try {
+    const receipt = await readClient.readContract({
+      address: CONTRACT_ADDRESS,
+      functionName: 'get_contract_balance',
+      args: [],
+    });
+    showOut(out, weiToGenString(readValue(receipt)) + ' GEN', 'ok');
+  } catch (err) {
+    showOut(out, 'Could not load balance: ' + (err?.message || err), 'err');
+  }
+});
+
+</script>
+</body>
+</html>
