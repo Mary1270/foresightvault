@@ -684,7 +684,11 @@ function describeTxError(err){
 function marketPhase(record){
   if (record.status === 'resolved') return 'resolved';
   if (record.status === 'refunding') {
-    return record.refund_reason === 'no_winning_stakers' ? 'refunding (no winning stakers)' : 'refunding (expired)';
+    // list_markets summaries do not include refund_reason, so never guess
+    // one: only name the reason when the full record provides it.
+    if (record.refund_reason === 'no_winning_stakers') return 'refunding (no winning stakers)';
+    if (record.refund_reason === 'expired') return 'refunding (expired)';
+    return 'refunding';
   }
   if (record.status !== 'staking') return String(record.status);
   const now = Date.now();
