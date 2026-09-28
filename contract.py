@@ -494,6 +494,14 @@ class ForesightVault(gl.Contract):
     # Credited, not-yet-withdrawn balances: address -> wei.
     pending_withdrawals: TreeMap[str, u256]
 
+    # Accounting counters. Every wei this contract has accepted through
+    # stake() is owed to someone (a market pool, a claim, or a refund) until
+    # withdraw() sends it out, so total_received - total_withdrawn is the
+    # contract's exact liability. Anything the real balance holds beyond
+    # that was not accepted by contract code (see get_accounting()).
+    total_received: u256
+    total_withdrawn: u256
+
     MIN_STAKE_WEI = u256(10**15)  # 0.001 GEN anti-dust floor (not a cap)
 
     MIN_STAKING_LEAD_SECONDS = 1800             # 30 minutes
@@ -508,6 +516,8 @@ class ForesightVault(gl.Contract):
 
     def __init__(self):
         self.market_count = u256(0)
+        self.total_received = u256(0)
+        self.total_withdrawn = u256(0)
 
     # =========================================================================
     # Internal helpers (deterministic)
@@ -749,22 +759,40 @@ class ForesightVault(gl.Contract):
 
     @gl.public.write.payable
     def stake(self, market_id: str, outcome_index: int) -> str:
-        """Stake the attached GEN on one outcome. Repeated stakes on the same
+        """
+        Stake the attached GEN on one outcome. Repeated stakes on the same
         outcome are additive; staking on several outcomes (hedging) is
-        allowed. Only before staking_deadline."""
-        market = self._load_market(market_id)
-        if market["status"] != "staking":
-            raise gl.vm.UserError("This market is no longer accepting stakes.")
-        if self._now_utc() >= self._parse_iso8601_utc(market["staking_deadline"]):
-            raise gl.vm.UserError("Staking for this market has closed.")
-        n = len(market["outcomes"])
-        if not is_plain_int(outcome_index) or outcome_index < 0 or outcome_index >= n:
-            raise gl.vm.UserError(f"outcome_index must be an integer between 0 and {n - 1}.")
-        value = int(gl.message.value)
-        if value < int(self.MIN_STAKE_WEI):
-            raise gl.vm.UserError(f"Stake at least {int(self.MIN_STAKE_WEI)} wei.")
+        allowed. Only before staking_deadline.
 
+        Invalid stakes never revert once value is attached. Verified live on
+        GenLayer Studio: when a payable call reverts, the attached GEN still
+        lands in the contract balance, but the revert also discards any
+        record of who sent it, so it could never be returned. Instead, an
+        invalid stake credits the full attached value back to the sender's
+        withdrawable balance and returns {"accepted": false, ...}. Only a
+        call with zero value (nothing to protect) is rejected with an error.
+
+        Returns JSON: {"accepted": true, "market_id", "outcome_index",
+        "position_wei", "total_pool"} or {"accepted": false, "reason",
+        "refunded_wei"}.
+        """
+        value = int(gl.message.value)
+        if value == 0:
+            raise gl.vm.UserError(
+                f"Attach at least {int(self.MIN_STAKE_WEI)} wei to stake."
+            )
         staker = self._address_key(gl.message.sender_address)
+        self.total_received = u256(int(self.total_received) + value)
+
+        reason = self._stake_rejection_reason(market_id, outcome_index, value)
+        if reason is not None:
+            self._credit(staker, value)
+            return json.dumps(
+                {"accepted": False, "reason": reason, "refunded_wei": str(value)},
+                sort_keys=True,
+            )
+
+        market = json.loads(self.markets[market_id])
         key = self._position_key(market_id, outcome_index, staker)
         if key in self.positions:
             self.positions[key] = u256(int(self.positions[key]) + value)
@@ -774,7 +802,34 @@ class ForesightVault(gl.Contract):
 
         market["outcome_pools"][outcome_index] = str(int(market["outcome_pools"][outcome_index]) + value)
         market["total_pool"] = str(int(market["total_pool"]) + value)
-        return self._save_market(market)
+        self._save_market(market)
+        return json.dumps(
+            {
+                "accepted": True,
+                "market_id": market_id,
+                "outcome_index": outcome_index,
+                "position_wei": str(int(self.positions[key])),
+                "total_pool": market["total_pool"],
+            },
+            sort_keys=True,
+        )
+
+    def _stake_rejection_reason(self, market_id, outcome_index, value: int):
+        """Return why a stake is invalid, or None if it is valid. Never
+        raises, so stake() can refund instead of reverting."""
+        if not isinstance(market_id, str) or market_id not in self.markets:
+            return "No market found with this id."
+        market = json.loads(self.markets[market_id])
+        if market["status"] != "staking":
+            return "This market is no longer accepting stakes."
+        if self._now_utc() >= self._parse_iso8601_utc(market["staking_deadline"]):
+            return "Staking for this market has closed."
+        n = len(market["outcomes"])
+        if not is_plain_int(outcome_index) or outcome_index < 0 or outcome_index >= n:
+            return f"outcome_index must be an integer between 0 and {n - 1}."
+        if value < int(self.MIN_STAKE_WEI):
+            return f"Stake at least {int(self.MIN_STAKE_WEI)} wei."
+        return None
 
     @gl.public.write
     def resolve_market(self, market_id: str, source_urls: list[str]) -> str:
@@ -931,6 +986,7 @@ class ForesightVault(gl.Contract):
             raise gl.vm.UserError("You have no withdrawable balance.")
         amount = int(self.pending_withdrawals[caller])
         self.pending_withdrawals[caller] = u256(0)
+        self.total_withdrawn = u256(int(self.total_withdrawn) + amount)
         _Payee(Address(caller)).emit_transfer(value=u256(amount))
         return f"Withdrew {amount} wei."
 
@@ -1020,4 +1076,25 @@ class ForesightVault(gl.Contract):
     @gl.public.view
     def get_contract_balance(self) -> str:
         return str(int(self.balance))
+
+    @gl.public.view
+    def get_accounting(self) -> str:
+        """Transparent solvency check: the real on-chain balance, what the
+        contract owes (every wei it accepted and has not yet paid out), and
+        any surplus the contract never accepted through its own code (for
+        example GEN attached to a transaction that reverted before
+        reaching contract logic). Liabilities are never larger than the
+        balance; a nonzero surplus is reported, never silently absorbed."""
+        balance = int(self.balance)
+        liabilities = int(self.total_received) - int(self.total_withdrawn)
+        return json.dumps(
+            {
+                "contract_balance": str(balance),
+                "liabilities": str(liabilities),
+                "unaccounted_surplus": str(balance - liabilities),
+                "total_received": str(int(self.total_received)),
+                "total_withdrawn": str(int(self.total_withdrawn)),
+            },
+            sort_keys=True,
+        )
 

@@ -1,6 +1,6 @@
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![GenLayer](https://img.shields.io/badge/GenLayer-Intelligent%20Contract-3E9B4F)
-![Tests](https://img.shields.io/badge/offline%20tests-147%20passing-3E9B4F)
+![Tests](https://img.shields.io/badge/offline%20tests-150%20passing-3E9B4F)
 
 # ForesightVault
 
@@ -66,7 +66,7 @@ create_market ──► stake (anyone, many times) ──► staking_deadline
 | Method | Who | What it does |
 |---|---|---|
 | `create_market(question, outcomes, required_source_domains, staking_deadline, resolution_deadline)` | anyone | Defines the question, 2–6 outcome labels, ≥2 committed news domains (optionally `domain/path`), and timing. Not payable. |
-| `stake(market_id, outcome_index)` *payable* | anyone | Adds the attached GEN to a position. Repeat stakes add up; hedging across outcomes is allowed. |
+| `stake(market_id, outcome_index)` *payable* | anyone | Adds the attached GEN to a position. Repeat stakes add up; hedging across outcomes is allowed. An invalid stake does **not** revert: the attached GEN is credited back to the sender (see [Live verification](#live-verification)). |
 | `resolve_market(market_id, source_urls)` | anyone | Runs the consensus pipeline below. |
 | `expire_market(market_id)` | anyone | After the window closes undecided, switches the market to refunds. |
 | `claim(market_id)` | each staker | Credits the caller's payout or refund. Once per address per market. |
@@ -74,7 +74,8 @@ create_market ──► stake (anyone, many times) ──► staking_deadline
 
 Views: `get_market`, `list_markets(offset, limit)` (newest first, max 50
 per page), `get_stake`, `get_claimable`, `has_claimed`,
-`get_pending_withdrawal`, `get_contract_balance`, `total_markets`.
+`get_pending_withdrawal`, `get_contract_balance`, `get_accounting`,
+`total_markets`.
 
 Timing bounds: staking closes 30 minutes to 30 days after creation;
 resolution opens 5 minutes to 30 days after staking closes; the resolution
@@ -137,6 +138,18 @@ non-deterministic block cannot be caught by the calling contract code.
 - **Pull payments.** `claim` only credits a balance. `withdraw` zeroes the
   balance *before* transferring (checks-effects-interactions), so one
   wallet that fails to receive funds can never block anyone else.
+- **Refund instead of revert.** On GenLayer, GEN attached to a payable call
+  that reverts still lands in the contract, while the revert erases any
+  record of the sender (verified live, see below). So once value is
+  attached, `stake` never reverts: an invalid stake (unknown market,
+  closed staking, bad outcome index, below the minimum) credits the full
+  amount back to the sender's withdrawable balance and returns
+  `{"accepted": false, "reason": ..., "refunded_wei": ...}`. Only a
+  zero-value call is rejected with an error.
+- **Transparent accounting.** `get_accounting` reports the real balance,
+  the contract's liabilities (every wei accepted through `stake` and not
+  yet withdrawn), and any unaccounted surplus, so solvency can be audited
+  on-chain at any time.
 
 A solvency test stakes into two markets from 25 wallets, resolves one,
 refunds the other, claims and withdraws everything, and checks that GEN
@@ -161,7 +174,7 @@ order, and resolved/refunded endings).
 | Ambiguous outcome labels (`Yes` vs `Yes.`, or a label named `None`) | Rejected at creation, using the same normalization as answer parsing. The first labeled `OUTCOME:` line is authoritative; mentions elsewhere are ignored. |
 | Spam stakes to block users or inflate settlement cost | No loops and no caps: per-user O(1) claims. The anti-dust minimum stake is 0.001 GEN. |
 | Unbounded reads | `list_markets` is paginated (max 50 per page). |
-| Funds trapped | Every terminal state has a claim path. Rounding remainder is paid out. Failed consensus changes nothing. |
+| Funds trapped | Every terminal state has a claim path. Rounding remainder is paid out. Failed consensus changes nothing. Invalid stakes are refunded instead of reverted, because a reverted payable call on GenLayer keeps the GEN with no record of the sender. |
 
 ### Known limitations (disclosed)
 
@@ -209,9 +222,59 @@ throughout.
 
 ---
 
-## Live deployment
+## Live verification
 
-GenLayer Studio: [`0x578c7449B5D7DC6509730E38389A11503D9b735a`](https://explorer-studio.genlayer.com/address/0x578c7449B5D7DC6509730E38389A11503D9b735a)
+### v1.0 (superseded test deployment): [`0x578c7449B5D7DC6509730E38389A11503D9b735a`](https://explorer-studio.genlayer.com/address/0x578c7449B5D7DC6509730E38389A11503D9b735a)
+
+A full lifecycle was run with real GEN on GenLayer Studio, using a real
+event (the 2026 US Open men's singles final) and two wallets:
+
+| Step | Result |
+|---|---|
+| `create_market` (2 outcomes, `cnn.com` + `bbc.com` committed) | Accepted, 0 rotations |
+| Stakes: 1 GEN on Zverev (wallet A), 3 GEN on Shelton (wallet B) | Pools and staker counts correct; contract balance 4 GEN |
+| Guards: zero stake, early resolve, early claim, early expire, empty withdraw, out-of-range index, reserved label `None`, labels `Yes`/`Yes.`, stake after deadline | All rejected with the expected messages |
+| `resolve_market` with a host-confusion URL (`https://attacker.example\@cnn.com/x`) | Rejected before any fetch |
+| `resolve_market` with CNN + BBC | CNN returned no usable text to the fetcher; BBC was confirmed with a verbatim quote. Only 1 eligible source, so the result was `Indeterminate` and the source set was **not** locked (by design) |
+| `resolve_market` with CNN + BBC + Guardian | **Resolved: Alexander Zverev.** 2 independent confirmed sources, each with a verbatim quote; validators agreed with 0 rotations and the transaction finalized. The BBC quote differed from the first attempt, and validators still agreed, as designed: they compare the decision, not the audit text |
+| `claim` by the winner | Credited exactly 4 GEN (the whole pot) |
+| Second `claim`, and `claim` by the losing wallet | Both rejected |
+| `withdraw` | 4 GEN transferred to wallet A |
+
+**Finding from this run.** After everything was withdrawn, the contract
+still held 2 GEN: exactly the two 1-GEN stakes that had been rejected
+(out-of-range index, and staking closed). On GenLayer, a payable call that
+reverts keeps the attached GEN in the contract, but the revert discards any
+record of the sender, so that GEN was unrecoverable. v1.1 fixes this:
+invalid stakes are refunded to the sender instead of reverting, and
+`get_accounting` makes any such surplus visible. The offline test stub was
+changed to model this real behavior, and regression tests, mutation checks
+and the fuzz test now cover it. The 2 GEN on the v1.0 deployment were test
+funds.
+
+**Practical note.** `cnn.com` article pages returned no usable text to the
+GenLayer fetcher in this run, while `bbc.com` and `theguardian.com` worked.
+Market creators should commit domains whose article pages are
+server-rendered.
+
+### v1.1 (current): [`0xe02e66A77c9E5b177F187C9C25915fa49cef9013`](https://explorer-studio.genlayer.com/address/0xe02e66A77c9E5b177F187C9C25915fa49cef9013)
+
+The refund fix and the accounting view were re-verified live:
+
+| Step | Result |
+|---|---|
+| `get_accounting` on a fresh deployment | All values 0 |
+| `create_market` (`bbc.com` + `theguardian.com` committed) | Accepted |
+| `stake` 1 GEN with `outcome_index` 9 | **SUCCESS** (no revert): `{"accepted": false, "reason": "outcome_index must be an integer between 0 and 1.", "refunded_wei": "1000000000000000000"}` |
+| `get_pending_withdrawal` for that wallet | 1 GEN |
+| `withdraw` | 1 GEN returned to the sender |
+| `stake` 1 GEN after the staking deadline (the exact case that lost GEN on v1.0) | **SUCCESS** (no revert): `accepted: false`, "Staking for this market has closed.", 1 GEN refunded |
+| `withdraw` | 1 GEN returned to the sender |
+| `resolve_market` with BBC + Guardian on a market nobody staked on | Resolved to Alexander Zverev from 2 quoted, confirmed sources (0 rotations, finalized); status `refunding`, reason `no_winning_stakers` |
+| `get_accounting` at the end | Balance 0, liabilities 0, unaccounted surplus 0; received 2 GEN, withdrawn 2 GEN |
+
+`claim` and `withdraw` for a winning position were verified live on v1.0;
+their code is unchanged in v1.1.
 
 ## Deploying
 
@@ -240,7 +303,12 @@ GEN, using two wallets (A and B):
 5. **Claim:** A's `get_claimable` shows 4 GEN; A calls `claim`, then
    `withdraw`, and receives 4 GEN in the wallet. B's `claim` reverts ("no
    stake on the winning outcome"). A second `claim` by A reverts.
-6. **Attack check:** on another market, `resolve_market` with
+6. **Refund check:** wallet B stakes 1 GEN with `outcome_index` 9. The
+   call succeeds with `{"accepted": false, ...}`; `get_pending_withdrawal`
+   for B shows 1 GEN and `withdraw` returns it.
+7. **Accounting:** after all claims and withdrawals, `get_accounting`
+   reports balance, liabilities and unaccounted surplus all equal to 0.
+8. **Attack check:** on another market, `resolve_market` with
    `https://attacker.example\@<allowlisted-domain>/x` reverts before any
    fetch.
 

@@ -358,6 +358,9 @@ class ForesightVault(gl.Contract):
 
     pending_withdrawals: TreeMap[str, u256]
 
+    total_received: u256
+    total_withdrawn: u256
+
     MIN_STAKE_WEI = u256(10**15)
 
     MIN_STAKING_LEAD_SECONDS = 1800
@@ -372,6 +375,8 @@ class ForesightVault(gl.Contract):
 
     def __init__(self):
         self.market_count = u256(0)
+        self.total_received = u256(0)
+        self.total_withdrawn = u256(0)
 
     def _now_utc(self):
         return datetime.datetime.now(datetime.timezone.utc)
@@ -592,19 +597,23 @@ class ForesightVault(gl.Contract):
 
     @gl.public.write.payable
     def stake(self, market_id: str, outcome_index: int) -> str:
-        market = self._load_market(market_id)
-        if market["status"] != "staking":
-            raise gl.vm.UserError("This market is no longer accepting stakes.")
-        if self._now_utc() >= self._parse_iso8601_utc(market["staking_deadline"]):
-            raise gl.vm.UserError("Staking for this market has closed.")
-        n = len(market["outcomes"])
-        if not is_plain_int(outcome_index) or outcome_index < 0 or outcome_index >= n:
-            raise gl.vm.UserError(f"outcome_index must be an integer between 0 and {n - 1}.")
         value = int(gl.message.value)
-        if value < int(self.MIN_STAKE_WEI):
-            raise gl.vm.UserError(f"Stake at least {int(self.MIN_STAKE_WEI)} wei.")
-
+        if value == 0:
+            raise gl.vm.UserError(
+                f"Attach at least {int(self.MIN_STAKE_WEI)} wei to stake."
+            )
         staker = self._address_key(gl.message.sender_address)
+        self.total_received = u256(int(self.total_received) + value)
+
+        reason = self._stake_rejection_reason(market_id, outcome_index, value)
+        if reason is not None:
+            self._credit(staker, value)
+            return json.dumps(
+                {"accepted": False, "reason": reason, "refunded_wei": str(value)},
+                sort_keys=True,
+            )
+
+        market = json.loads(self.markets[market_id])
         key = self._position_key(market_id, outcome_index, staker)
         if key in self.positions:
             self.positions[key] = u256(int(self.positions[key]) + value)
@@ -614,7 +623,32 @@ class ForesightVault(gl.Contract):
 
         market["outcome_pools"][outcome_index] = str(int(market["outcome_pools"][outcome_index]) + value)
         market["total_pool"] = str(int(market["total_pool"]) + value)
-        return self._save_market(market)
+        self._save_market(market)
+        return json.dumps(
+            {
+                "accepted": True,
+                "market_id": market_id,
+                "outcome_index": outcome_index,
+                "position_wei": str(int(self.positions[key])),
+                "total_pool": market["total_pool"],
+            },
+            sort_keys=True,
+        )
+
+    def _stake_rejection_reason(self, market_id, outcome_index, value: int):
+        if not isinstance(market_id, str) or market_id not in self.markets:
+            return "No market found with this id."
+        market = json.loads(self.markets[market_id])
+        if market["status"] != "staking":
+            return "This market is no longer accepting stakes."
+        if self._now_utc() >= self._parse_iso8601_utc(market["staking_deadline"]):
+            return "Staking for this market has closed."
+        n = len(market["outcomes"])
+        if not is_plain_int(outcome_index) or outcome_index < 0 or outcome_index >= n:
+            return f"outcome_index must be an integer between 0 and {n - 1}."
+        if value < int(self.MIN_STAKE_WEI):
+            return f"Stake at least {int(self.MIN_STAKE_WEI)} wei."
+        return None
 
     @gl.public.write
     def resolve_market(self, market_id: str, source_urls: list[str]) -> str:
@@ -731,6 +765,7 @@ class ForesightVault(gl.Contract):
             raise gl.vm.UserError("You have no withdrawable balance.")
         amount = int(self.pending_withdrawals[caller])
         self.pending_withdrawals[caller] = u256(0)
+        self.total_withdrawn = u256(int(self.total_withdrawn) + amount)
         _Payee(Address(caller)).emit_transfer(value=u256(amount))
         return f"Withdrew {amount} wei."
 
@@ -810,3 +845,18 @@ class ForesightVault(gl.Contract):
     @gl.public.view
     def get_contract_balance(self) -> str:
         return str(int(self.balance))
+
+    @gl.public.view
+    def get_accounting(self) -> str:
+        balance = int(self.balance)
+        liabilities = int(self.total_received) - int(self.total_withdrawn)
+        return json.dumps(
+            {
+                "contract_balance": str(balance),
+                "liabilities": str(liabilities),
+                "unaccounted_surplus": str(balance - liabilities),
+                "total_received": str(int(self.total_received)),
+                "total_withdrawn": str(int(self.total_withdrawn)),
+            },
+            sort_keys=True,
+        )

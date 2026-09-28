@@ -508,9 +508,9 @@
         </div>
 
         <div class="panel">
-          <h2>Contract balance</h2>
-          <p class="desc">Total GEN currently custodied by this contract on-chain.</p>
-          <button class="secondary" id="balanceBtn" type="button">Check balance</button>
+          <h2>Contract accounting</h2>
+          <p class="desc">The real on-chain balance, what the contract owes stakers, and any GEN that arrived without passing through contract logic.</p>
+          <button class="secondary" id="balanceBtn" type="button">Check accounting</button>
           <div class="out" id="balanceOut"></div>
         </div>
       </div>
@@ -534,7 +534,7 @@ import { studionet } from "https://esm.sh/genlayer-js@latest/chains";
 // EDIT THIS after you deploy ForesightVault's contract.py — paste the
 // deployed address here (from the Studio/explorer "Deployed at" field).
 // ------------------------------------------------------------------
-const CONTRACT_ADDRESS = "0x578c7449B5D7DC6509730E38389A11503D9b735a";
+const CONTRACT_ADDRESS = "0xe02e66A77c9E5b177F187C9C25915fa49cef9013";
 
 document.getElementById('contractAddrText').textContent = CONTRACT_ADDRESS;
 
@@ -1066,8 +1066,14 @@ document.getElementById('sSubmit').addEventListener('click', async () => {
 
   showOut(out, 'Submitting transaction…', 'info');
   try {
-    const { txHash } = await sendTx(out, 'stake', [currentMarketId, outcomeIndex], wei);
-    showOut(out, `Stake finalized.\n\nTx: ${txHash}`, 'ok');
+    const { txHash, result } = await sendTx(out, 'stake', [currentMarketId, outcomeIndex], wei);
+    let outcome = result;
+    if (typeof outcome === 'string') { try { outcome = JSON.parse(outcome); } catch (e) { outcome = null; } }
+    if (outcome && outcome.accepted === false) {
+      showOut(out, `Stake not accepted: ${outcome.reason}\nYour ${weiToGenString(outcome.refunded_wei)} GEN was credited back — use Withdraw to receive it.\n\nTx: ${txHash}`, 'err');
+    } else {
+      showOut(out, `Stake accepted.\n\nTx: ${txHash}`, 'ok');
+    }
     await refreshMarket();
     await refreshMyStake();
   } catch (err) {
@@ -1264,10 +1270,14 @@ document.getElementById('balanceBtn').addEventListener('click', async () => {
   try {
     const receipt = await readClient.readContract({
       address: CONTRACT_ADDRESS,
-      functionName: 'get_contract_balance',
+      functionName: 'get_accounting',
       args: [],
     });
-    showOut(out, weiToGenString(readValue(receipt)) + ' GEN', 'ok');
+    const a = readJson(receipt, {});
+    showOut(out,
+      `Balance:     ${weiToGenString(a.contract_balance)} GEN\n` +
+      `Liabilities: ${weiToGenString(a.liabilities)} GEN\n` +
+      `Unaccounted: ${weiToGenString(a.unaccounted_surplus)} GEN`, 'ok');
   } catch (err) {
     showOut(out, 'Could not load balance: ' + (err?.message || err), 'err');
   }
