@@ -276,6 +276,16 @@ The refund fix and the accounting view were re-verified live:
 `claim` and `withdraw` for a winning position were verified live on v1.0;
 their code is unchanged in v1.1.
 
+**Frontend, against the live v1.1 contract** (GitHub Pages): the Explore
+list, market page (status, winner, locked sources, and the evidence trail
+showing each source's verbatim quote), and the accounting panel all read
+correctly from chain. A write through the site itself (`create_market`
+from an in-browser test session) was sent, waited on until finalized, and
+navigated automatically to the new market (#1, a frontend test market).
+Live testing also caught one display bug, fixed: the Explore list labeled a
+refunding market's reason as "expired" because list summaries carry no
+refund reason; it now shows the reason only when the full record has it.
+
 ## Deploying
 
 1. Deploy **`contract_deploy.py`** on GenLayer Studio (no constructor
