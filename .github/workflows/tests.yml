@@ -1,1 +1,26 @@
+name: tests
 
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Deploy build is up to date and identical to contract.py
+        run: python3 tools/build_deploy.py --check
+      - name: Test contract.py
+        run: python3 -m unittest discover -s tests -p "test_*.py" -v
+      - name: Test contract_deploy.py
+        env:
+          FORESIGHTVAULT_CONTRACT: contract_deploy.py
+        run: python3 -m unittest discover -s tests -p "test_*.py"
