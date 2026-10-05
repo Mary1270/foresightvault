@@ -1,6 +1,6 @@
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![GenLayer](https://img.shields.io/badge/GenLayer-Intelligent%20Contract-3E9B4F)
-![Tests](https://img.shields.io/badge/offline%20tests-150%20passing-3E9B4F)
+![Tests](https://img.shields.io/badge/offline%20tests-157%20passing-3E9B4F)
 
 # ForesightVault
 
@@ -13,7 +13,7 @@ least two independent, confirmed sources that **quote the outcome
 verbatim**. Winners then claim the whole pot in proportion to their stake.
 
 The trust pattern (address-bound stakes, a reputable-domain allowlist, a
-quality-gated locked source set, pull payments) comes from an earlier,
+source-commitment rules, pull payments) comes from an earlier,
 reviewed two-party sports-settlement contract. What is new here: N-way
 outcomes instead of over/under, a pooled market with proportional payouts
 instead of a two-party bet, grounded (quoted) and confirmed-only evidence,
@@ -93,29 +93,61 @@ window lasts 48 hours.
    `gl.nondet.web.render` and the model answers four fixed-format
    questions: `RELEVANCE`, `STATUS` (Confirmed / Projected / Unknown),
    `OUTCOME` (an outcome label copied verbatim) and `QUOTE` (a verbatim
-   excerpt stating the outcome). The contract, not the model, decides
-   whether a source counts. It must be Relevant, Confirmed, name exactly one
-   listed outcome, and its quote must actually appear in the fetched page.
-3. **Quorum.** A decisive result needs ≥2 eligible sources and a strict
-   plurality (no tie for first place).
-4. **Exact-decision consensus.** Settlement uses
-   `gl.vm.run_nondet_unsafe(leader_fn, validator_fn)`. Every validator
-   re-fetches and re-evaluates every source itself, and accepts the
-   leader's result only if its own **decision** is identical: the same
-   winning outcome (or none), and the same answer to "is this evidence
-   strong enough to lock the source set". Per-source audit details
-   (quotes, fetch statuses) are excluded from the comparison, because
-   independently fetched pages can legitimately differ byte-for-byte while
-   supporting the same decision. The validator also rejects anything that
-   is not a successful `gl.vm.Return`, and any malformed leader payload.
-5. **If validators disagree,** the transaction is not accepted and
+   excerpt reporting the outcome). The contract, not the model, decides
+   whether a source casts a vote: it must be Relevant, Confirmed, name
+   exactly one listed outcome, and its quote must appear in the fetched
+   page.
+3. **Validator-backed evidence.** The leader proposes only one
+   `{url, vote, quote}` per submitted source, nothing else. Settlement uses
+   `gl.vm.run_nondet_unsafe(leader_fn, validator_fn)`, and every validator
+   re-fetches and re-evaluates **every** source itself. It accepts only if,
+   for every source:
+   - its own vote equals the leader's vote, so the leader can neither
+     invent, change nor suppress a vote;
+   - for a counted source, the leader's quote is found verbatim on the
+     validator's **own** fetch of that page, **and** the validator's own
+     model, shown the quote in the context of the page (`EXCERPT_CHECK`),
+     confirms it reports that outcome. A leader can neither fabricate a
+     quote nor swap in an unrelated sentence from the page.
+
+   The proposal is parsed strictly: exact keys, URLs in submission order,
+   integer (never boolean) votes in range, quote bounds. Anything else, or
+   anything that is not a successful `gl.vm.Return`, is a disagreement.
+   The counted-source total and the winner are then **recomputed by the
+   contract** from the agreed votes; nothing the leader reports is stored
+   unverified. Stored evidence holds exactly `url`, `domain`, `path`,
+   `vote`, `quote` and `attempt`. A source with no vote has no effect on
+   the outcome and is not recorded; for it, validators only need to agree
+   that it does not count (they do not have to agree on *why*, such as a
+   fetch error versus a poll).
+4. **Immutable evidence ledger.** Every source that produces a
+   validator-agreed vote is recorded permanently, with that vote and its
+   verified quote. Recorded evidence is **never re-evaluated or
+   overwritten**, and no other page from the same outlet can be added, so
+   agreed evidence, including dissent, can never be removed, changed or
+   diluted. Later attempts submit only **new** outlets, so a conflicting
+   first set cannot freeze the market. Sources that never produced an
+   agreed vote are not recorded and may be submitted again, so irrelevant
+   pages cannot poison a market. The first attempt needs 2–6 sources, later
+   attempts 1 or more, and the ledger never exceeds 6 sources. Committed
+   domains must be covered by recorded or newly submitted sources. Recorded
+   sources are not fetched again, which also reduces the chance of
+   validator disagreement on retries.
+5. **Quorum and finality.** A decisive result needs ≥2 recorded votes and a
+   strict plurality (no tie for first place). As soon as the ledger reaches
+   a decisive result, the market settles (or moves to refunds if nobody
+   backed the winner), and that settlement is **final by design**: payouts
+   must not depend on how long someone keeps searching for contrary
+   reports. Until then, the market stays open for new evidence within the
+   48-hour window.
+6. **If validators disagree,** the transaction is not accepted and
    nothing changes. The market stays open for another attempt within the
    window, and becomes refundable via `expire_market` afterwards. Funds
    can never be stuck by a failed consensus.
 
 The evaluation closures capture only plain values, never `self`, and every
 exception inside them (fetch failures, model errors) is caught and turned
-into a record with a non-`ok` quality flag. An exception escaping a
+into "no vote" for that source. An exception escaping a
 non-deterministic block cannot be caught by the calling contract code.
 
 ---
@@ -168,8 +200,10 @@ order, and resolved/refunded endings).
 | One hostile or wrong page decides the market | ≥2 independent allowlisted domains must agree, with a strict plurality. At most one URL per domain. |
 | Model hallucinates or is prompt-injected by a page | All inputs are declared untrusted data. The outcome must be quoted **verbatim from the fetched page** (checked by the contract). Every validator independently repeats the whole evaluation. |
 | Polls, projections, or "expected to win" articles settle early | `STATUS` must be `Confirmed`; anything else is ineligible. |
-| Leader reports a result validators can't reproduce, or a malformed/type-confused one (e.g. `true` where the index `1` belongs, since `True == 1` in Python) | Validators compare the exact decision with strict types (bools are never accepted as integers) and reject any malformed payload; any mismatch rejects the transaction. |
-| Resolver shops for a favourable source combination | Once an attempt produces real evidence (≥2 eligible sources, even if split), the exact URL set (case-sensitive, order-independent) is locked for all retries. Irrelevant first attempts don't lock, so they can't poison a market. |
+| Leader alters the audit trail while keeping the payout decision (changed or invented quote, suppressed or invented vote, inflated source count) | Validators agree on the full per-source vote vector, verify every counted quote on their own fetch of the page, and confirm with their own model that it reports the outcome. Count and winner are recomputed by the contract. |
+| Leader sends a malformed or type-confused proposal (e.g. `true` where the index `1` belongs, since `True == 1` in Python) | Strict parsing: exact keys, URLs in order, integer (never boolean) votes in range; anything else is a disagreement. |
+| Resolver submits two valid but conflicting sources first, to freeze the market and force refunds | Recorded evidence is final but does not freeze the market: new outlets can be added until one outcome has a strict plurality. |
+| Resolver shops for a favourable source combination, or tries to rewrite earlier evidence | Every agreed vote is recorded immutably and never re-evaluated, so dissent can never be dropped, flipped, or erased by a later fetch failure; a recorded outlet cannot be diluted with a second page; evidence can only be added, up to 6 sources in total. |
 | Resolving before the event | `resolve_market` only opens at `resolution_deadline`, after staking has closed. |
 | Ambiguous outcome labels (`Yes` vs `Yes.`, or a label named `None`) | Rejected at creation, using the same normalization as answer parsing. The first labeled `OUTCOME:` line is authoritative; mentions elsewhere are ignored. |
 | Spam stakes to block users or inflate settlement cost | No loops and no caps: per-user O(1) claims. The anti-dust minimum stake is 0.001 GEN. |
@@ -182,8 +216,14 @@ order, and resolved/refunded endings).
   know when an event's outcome becomes public. If the creator sets
   `staking_deadline` after that point, late stakers could bet on a known
   result. The UI warns about this at creation.
-- **The locked source set is final.** If a locked page later goes offline,
-  the market cannot resolve and will be refunded via `expire_market`.
+- **Stricter agreement, more retries.** Validators must agree on every
+  source's vote and verify every quote, not just the winner. A transient
+  fetch or model difference on one source makes that attempt fail without
+  changing anything; it can simply be retried within the 48-hour window.
+- **Recorded evidence is permanent.** Once 6 sources are recorded and still
+  split, no further source can be added and the market refunds via
+  `expire_market`. This only happens when 6 independent outlets genuinely
+  disagree.
 - **Allowlist scope.** Evidence comes only from the fixed allowlist of
   major news outlets. Pages must be server-rendered; JavaScript-only pages
   cannot be read by the fetcher.
@@ -192,9 +232,9 @@ order, and resolved/refunded endings).
   never pick a wrong winner).
 - **Stakes are final.** There is no un-staking before the deadline;
   undecided markets refund in full.
-- **Only the latest attempt's evidence is stored.** Earlier inconclusive
-  attempts are overwritten. Retries after a lock always use the same
-  sources.
+- **No corrections.** A recorded vote is final even if the outlet later
+  edits its page. This is deliberate: allowing re-evaluation would let a
+  later attempt rewrite earlier evidence.
 
 ---
 
@@ -222,6 +262,34 @@ throughout.
 
 ---
 
+## v1.2: settlement-integrity changes from review
+
+A steward review of v1.1 raised two settlement-integrity issues. Both were
+real; both are fixed in v1.2.
+
+1. **A conflicting first source set could freeze a market.** v1.1 locked the
+   exact URL set as soon as two eligible sources existed, even if they
+   disagreed, so later decisive evidence could never be added and the market
+   drifted to refunds. v1.2 replaces the lock with an **immutable evidence
+   ledger** (see "How settlement reaches consensus", step 4): agreed votes
+   are recorded permanently and can never be removed, rewritten or diluted,
+   while new outlets can be added until one outcome wins. Regression tests:
+   `ImmutableEvidenceTests.test_steward_scenario_conflicting_first_set_can_be_recovered`
+   and `test_no_later_attempt_can_overwrite_a_recorded_vote`.
+2. **The stored evidence trail was leader-reported.** v1.1 validators
+   compared only the winner and the lock flag, so per-source records, quotes
+   and the source count were taken from the leader. In v1.2 validators agree
+   on every source's vote, verify every counted quote against their own fetch
+   and their own model, and the contract recomputes the count and winner
+   (step 3). `ValidatorBackedEvidenceTests` covers altered quotes, a
+   different real sentence from the page, suppressed, invented and flipped
+   votes, extra unverified fields, type confusion, and a quote absent from a
+   validator's own fetch, each of which is rejected with no state change.
+
+Every new safeguard was mutation-tested: deleting or weakening any one of
+them (15 in total, including allowing a recorded vote to be overwritten)
+makes at least one test fail.
+
 ## Live verification
 
 ### v1.0 (superseded test deployment): [`0x578c7449B5D7DC6509730E38389A11503D9b735a`](https://explorer-studio.genlayer.com/address/0x578c7449B5D7DC6509730E38389A11503D9b735a)
@@ -235,7 +303,7 @@ event (the 2026 US Open men's singles final) and two wallets:
 | Stakes: 1 GEN on Zverev (wallet A), 3 GEN on Shelton (wallet B) | Pools and staker counts correct; contract balance 4 GEN |
 | Guards: zero stake, early resolve, early claim, early expire, empty withdraw, out-of-range index, reserved label `None`, labels `Yes`/`Yes.`, stake after deadline | All rejected with the expected messages |
 | `resolve_market` with a host-confusion URL (`https://attacker.example\@cnn.com/x`) | Rejected before any fetch |
-| `resolve_market` with CNN + BBC | CNN returned no usable text to the fetcher; BBC was confirmed with a verbatim quote. Only 1 eligible source, so the result was `Indeterminate` and the source set was **not** locked (by design) |
+| `resolve_market` with CNN + BBC | CNN returned no usable text to the fetcher; BBC was confirmed with a verbatim quote. Only 1 eligible source, so the result was `Indeterminate` and nothing was locked |
 | `resolve_market` with CNN + BBC + Guardian | **Resolved: Alexander Zverev.** 2 independent confirmed sources, each with a verbatim quote; validators agreed with 0 rotations and the transaction finalized. The BBC quote differed from the first attempt, and validators still agreed, as designed: they compare the decision, not the audit text |
 | `claim` by the winner | Credited exactly 4 GEN (the whole pot) |
 | Second `claim`, and `claim` by the losing wallet | Both rejected |
@@ -257,7 +325,7 @@ GenLayer fetcher in this run, while `bbc.com` and `theguardian.com` worked.
 Market creators should commit domains whose article pages are
 server-rendered.
 
-### v1.1 (current): [`0xe02e66A77c9E5b177F187C9C25915fa49cef9013`](https://explorer-studio.genlayer.com/address/0xe02e66A77c9E5b177F187C9C25915fa49cef9013)
+### v1.1 (superseded): [`0xe02e66A77c9E5b177F187C9C25915fa49cef9013`](https://explorer-studio.genlayer.com/address/0xe02e66A77c9E5b177F187C9C25915fa49cef9013)
 
 The refund fix and the accounting view were re-verified live:
 
@@ -277,7 +345,7 @@ The refund fix and the accounting view were re-verified live:
 their code is unchanged in v1.1.
 
 **Frontend, against the live v1.1 contract** (GitHub Pages): the Explore
-list, market page (status, winner, locked sources, and the evidence trail
+list, market page (status, winner, source set, and the evidence trail
 showing each source's verbatim quote), and the accounting panel all read
 correctly from chain. A write through the site itself (`create_market`
 from an in-browser test session) was sent, waited on until finalized, and
@@ -285,6 +353,30 @@ navigated automatically to the new market (#1, a frontend test market).
 Live testing also caught one display bug, fixed: the Explore list labeled a
 refunding market's reason as "expired" because list summaries carry no
 refund reason; it now shows the reason only when the full record has it.
+
+### v1.2 (current): [`0x3C5A8BE55717E5fB44Ac9638d4C6Adc840935b62`](https://explorer-studio.genlayer.com/address/0x3C5A8BE55717E5fB44Ac9638d4C6Adc840935b62)
+
+The validator-backed evidence and the immutable evidence ledger were
+verified live with two wallets and real GEN (market `0`, the 2026 US Open
+men's singles final):
+
+| Step | Result |
+|---|---|
+| `get_accounting` and `list_markets` on a fresh deployment | All values 0; no markets |
+| `create_market` (`bbc.com` + `theguardian.com` committed) | Accepted |
+| Stakes: 1 GEN on Zverev (wallet A), 1 GEN on Shelton (wallet B) | `get_accounting`: balance 2 GEN, liabilities 2 GEN, surplus 0 |
+| `resolve_market` with a BBC article + the Guardian front page | BBC recorded with a verbatim quote (vote for Zverev); the front page had no usable report, so it was not counted. Result `Indeterminate`, status stays `staking`, 1 recorded source |
+| `resolve_market` again with the recorded BBC article | **Rejected:** `'bbc.com' already has recorded evidence for this market. Recorded evidence is final; submit only sources from other outlets.` |
+| `resolve_market` with a different BBC page (the live blog) | **Rejected** with the same message: a recorded outlet cannot be resubmitted under another URL |
+| `resolve_market` with the Guardian final report only | **Resolved: Alexander Zverev.** 2 independent recorded sources, each with a verbatim quote. The BBC vote and quote from the first attempt were unchanged |
+| `claim` by the winner (wallet A) | Credited exactly 2 GEN (the whole pot) |
+| `withdraw` | 2 GEN transferred to wallet A |
+| `get_accounting` at the end | Balance 0, liabilities 0, unaccounted surplus 0; received 2 GEN, withdrawn 2 GEN |
+
+The case of a conflicting first source set (which previously could lock a
+market) cannot be produced on demand with real news, so it is covered by
+the offline tests (`test_steward_scenario_conflicting_first_set_can_be_recovered`
+and the immutability tests).
 
 ## Deploying
 
@@ -318,7 +410,11 @@ GEN, using two wallets (A and B):
    for B shows 1 GEN and `withdraw` returns it.
 7. **Accounting:** after all claims and withdrawals, `get_accounting`
    reports balance, liabilities and unaccounted surplus all equal to 0.
-8. **Attack check:** on another market, `resolve_market` with
+8. **Immutable evidence:** on a market whose first resolve recorded one
+   source and stayed indeterminate, resubmitting that recorded URL (or
+   another page from the same outlet) reverts before any fetch, while
+   submitting one new outlet that agrees resolves the market.
+9. **Attack check:** on another market, `resolve_market` with
    `https://attacker.example\@<allowlisted-domain>/x` reverts before any
    fetch.
 

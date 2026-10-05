@@ -424,8 +424,8 @@
         </div>
 
         <div class="panel" id="marketEvidencePanel" style="display:none;">
-          <h2>Evidence trail</h2>
-          <p class="desc">Per-source classification from the most recent <code>resolve_market</code> attempt.</p>
+          <h2>Verified evidence</h2>
+          <p class="desc">Every row was independently reproduced by each validator: the same vote from its own fetch of the page, and a quote found verbatim on that page and confirmed to report the outcome. Recorded evidence is final: it is never re-evaluated or overwritten, and no other page from the same outlet can be added.</p>
           <div style="overflow-x:auto;">
             <table class="evidence" id="marketEvidenceTable"></table>
           </div>
@@ -457,9 +457,11 @@
           <h2>Resolve</h2>
           <p class="desc">
             Opens at the resolution deadline and stays open for 48 hours.
-            Submit 2–6 https article URLs (one per line, one per domain) that
-            report the <em>confirmed</em> outcome, covering every required
-            domain. Validators re-check every source independently; polls,
+            Submit https article URLs (one per line, one per outlet) that
+            report the <em>confirmed</em> outcome: 2–6 on the first attempt,
+            then only <em>new</em> outlets not under "Recorded sources", up to 6
+            recorded in total. Recorded evidence is final, and every required
+            domain must be covered. Validators re-check every source independently; polls,
             projections and pages that don't literally state the outcome
             are ignored.
           </p>
@@ -534,7 +536,7 @@ import { studionet } from "https://esm.sh/genlayer-js@latest/chains";
 // EDIT THIS after you deploy ForesightVault's contract.py — paste the
 // deployed address here (from the Studio/explorer "Deployed at" field).
 // ------------------------------------------------------------------
-const CONTRACT_ADDRESS = "0xe02e66A77c9E5b177F187C9C25915fa49cef9013";
+const CONTRACT_ADDRESS = "0x3C5A8BE55717E5fB44Ac9638d4C6Adc840935b62";
 
 document.getElementById('contractAddrText').textContent = CONTRACT_ADDRESS;
 
@@ -986,8 +988,12 @@ function renderMarket(record){
   if (record.final_classification) {
     fields.appendChild(fieldRow('Last result', record.final_classification));
   }
-  if (record.locked_source_urls) {
-    fields.appendChild(fieldRow('Locked sources', record.locked_source_urls.join('\n')));
+  if (record.recorded_source_urls && record.recorded_source_urls.length) {
+    fields.appendChild(fieldRow('Recorded sources', record.recorded_source_urls.join('\n')));
+    fields.appendChild(fieldRow('Source slots left', String(6 - record.recorded_source_urls.length)));
+  }
+  if (record.independent_source_count) {
+    fields.appendChild(fieldRow('Counted sources', String(record.independent_source_count)));
   }
   fields.appendChild(fieldRow('Resolution attempts', String(record.resolution_attempts)));
 
@@ -1020,28 +1026,33 @@ function renderMarket(record){
 
   const evidencePanel = document.getElementById('marketEvidencePanel');
   const evidenceTable = document.getElementById('marketEvidenceTable');
-  if (record.records && record.records.length) {
+  const evidence = Object.values(record.evidence || {}).sort((a, b) => a.url < b.url ? -1 : 1);
+  const counted = new Set(evidence.map(e => e.url));
+  const notCounted = (record.last_attempt || []).filter(r => !counted.has(r.url));
+  if (evidence.length || notCounted.length) {
     evidencePanel.style.display = 'block';
     clearChildren(evidenceTable);
-    const headRow = makeEl('tr', {}, [
-      makeEl('th', { text: 'URL' }),
-      makeEl('th', { text: 'Fetch' }),
-      makeEl('th', { text: 'Quality' }),
-      makeEl('th', { text: 'Matched outcome' }),
-      makeEl('th', { text: 'Quoted evidence' }),
-    ]);
-    evidenceTable.appendChild(headRow);
-    for (const rec of record.records) {
-      const matched = rec.matched_outcome_index !== null && rec.matched_outcome_index !== undefined
-        ? record.outcomes[rec.matched_outcome_index] : '—';
-      const tr = makeEl('tr', {}, [
-        makeEl('td', { className: 'url', text: rec.url }),
-        makeEl('td', { text: rec.fetch_status }),
-        makeEl('td', { text: rec.quality_flag }),
-        makeEl('td', { text: matched }),
-        makeEl('td', { className: 'quote', text: rec.quote || '—' }),
-      ]);
-      evidenceTable.appendChild(tr);
+    evidenceTable.appendChild(makeEl('tr', {}, [
+      makeEl('th', { text: 'Source' }),
+      makeEl('th', { text: 'Reports' }),
+      makeEl('th', { text: 'Verified quote' }),
+      makeEl('th', { text: 'Attempt' }),
+    ]));
+    for (const e of evidence) {
+      evidenceTable.appendChild(makeEl('tr', {}, [
+        makeEl('td', { className: 'url', text: e.url }),
+        makeEl('td', { text: record.outcomes[e.vote] ?? '—' }),
+        makeEl('td', { className: 'quote', text: e.quote || '—' }),
+        makeEl('td', { text: String(e.attempt) }),
+      ]));
+    }
+    for (const r of notCounted) {
+      evidenceTable.appendChild(makeEl('tr', {}, [
+        makeEl('td', { className: 'url', text: r.url }),
+        makeEl('td', { text: 'Not counted' }),
+        makeEl('td', { className: 'quote', text: 'No confirmed, quoted outcome agreed by validators in the last attempt' }),
+        makeEl('td', { text: String(record.resolution_attempts) }),
+      ]));
     }
   } else {
     evidencePanel.style.display = 'none';
