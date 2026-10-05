@@ -378,6 +378,11 @@ market) cannot be produced on demand with real news, so it is covered by
 the offline tests (`test_steward_scenario_conflicting_first_set_can_be_recovered`
 and the immutability tests).
 
+**Frontend, against the live v1.2 contract** (GitHub Pages): the market page for
+market 0 shows the resolved status and winner, both recorded sources, the
+source slots left, and the "Verified evidence" table with each source's
+verbatim quote and attempt number, all read from chain.
+
 ## Deploying
 
 1. Deploy **`contract_deploy.py`** on GenLayer Studio (no constructor
