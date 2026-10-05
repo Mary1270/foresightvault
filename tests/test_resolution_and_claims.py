@@ -1,18 +1,18 @@
 """
 End-to-end: create -> stake -> resolve (mocked web/LLM) -> claim ->
-withdraw, plus consensus disagreement, evidence grounding, the voting-set
-lock, refund paths and a full-lifecycle solvency invariant.
+withdraw, plus validator-backed evidence, evidence anchoring, refund paths
+and a full-lifecycle solvency invariant.
 """
 import json
 import unittest
 
 from _bootstrap import (
-    ALICE_ADDRESS, BOB_ADDRESS, CAROL_ADDRESS, STRANGER_ADDRESS,
+    M, ALICE_ADDRESS, BOB_ADDRESS, CAROL_ADDRESS, STRANGER_ADDRESS,
     ConsensusFailure, call, call_payable, gl, make_contract, reset_transfers, set_caller,
 )
 from _helpers import (
-    ANSWERS, AP_URL, BBC_URL, REUTERS_URL, close_resolution_window, create_market,
-    market, mocked_sources, open_resolution_window, resolve,
+    ANSWERS, AP_URL, BBC_URL, GUARDIAN_URL, NPR_URL, REUTERS_URL, close_resolution_window,
+    create_market, market, mocked_sources, open_resolution_window, resolve,
 )
 
 GEN = 10**18
@@ -66,6 +66,30 @@ class ResolutionGuardTests(unittest.TestCase):
             resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "A"})
 
 
+def run_with_leader(c, mid, pages, tamper=None, **mock_kwargs):
+    """Run resolve_market with a real validator pass, optionally tampering
+    with the leader's proposal first. Returns (validator_verdict, raised)."""
+    from unittest.mock import patch
+    verdict = {}
+
+    def run(leader_fn, validator_fn, /):
+        proposal = json.loads(leader_fn())
+        if tamper:
+            tamper(proposal)
+        verdict["ok"] = validator_fn(gl.vm.Return(json.dumps(proposal)))
+        if verdict["ok"] is not True:
+            raise ConsensusFailure("validators rejected the leader")
+        return json.dumps(proposal)
+
+    with mocked_sources(pages, **mock_kwargs):
+        with patch.object(gl.vm, "run_nondet_unsafe", side_effect=run):
+            try:
+                call(c, "resolve_market", mid, list(pages.keys()))
+                return verdict.get("ok"), None
+            except Exception as exc:
+                return verdict.get("ok"), exc
+
+
 class EvidenceQualityTests(unittest.TestCase):
     def setUp(self):
         self.c = make_contract()
@@ -73,259 +97,280 @@ class EvidenceQualityTests(unittest.TestCase):
         stake(self.c, self.mid, ALICE_ADDRESS, 0, GEN)
         open_resolution_window(self.c, self.mid)
 
-    def flags(self):
-        return [r["quality_flag"] for r in market(self.c, self.mid)["records"]]
+    def votes(self, m):
+        return [r["vote"] for r in m["last_attempt"]]
 
     def test_confirmed_grounded_sources_resolve(self):
         m = resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "A"})
         self.assertEqual(m["status"], "resolved")
         self.assertEqual(m["winning_outcome_index"], 0)
         self.assertEqual(m["final_classification"], "Candidate A wins")
-        self.assertTrue(all(r["quote"] for r in m["records"]))
+        self.assertEqual(m["independent_source_count"], 2)
+        for url in (REUTERS_URL, AP_URL):
+            self.assertEqual(m["evidence"][url]["vote"], 0)
+            self.assertIn("certified that Candidate A won", m["evidence"][url]["quote"])
 
     def test_projections_and_polls_never_count(self):
         m = resolve(self.c, self.mid, {REUTERS_URL: "POLL", AP_URL: "POLL"})
-        self.assertEqual(m["status"], "staking")
-        self.assertEqual(m["final_classification"], "Indeterminate")
-        self.assertEqual(self.flags(), ["not_confirmed", "not_confirmed"])
+        self.assertEqual((m["status"], m["final_classification"]), ("staking", "Indeterminate"))
+        self.assertEqual(self.votes(m), [None, None])
+        self.assertEqual(m["evidence"], {})
 
     def test_fabricated_quote_never_counts(self):
         m = resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "A"},
                     answer_override={"A": ANSWERS["FABRICATED"]})
+        self.assertEqual(self.votes(m), [None, None])
         self.assertEqual(m["status"], "staking")
-        self.assertEqual(self.flags(), ["quote_not_found", "quote_not_found"])
 
     def test_irrelevant_sources_never_count(self):
         m = resolve(self.c, self.mid, {REUTERS_URL: "IRRELEVANT", AP_URL: "IRRELEVANT"})
-        self.assertEqual(self.flags(), ["not_relevant", "not_relevant"])
-        self.assertIsNone(m["locked_source_urls"])
+        self.assertEqual(self.votes(m), [None, None])
+        self.assertEqual(m["recorded_source_urls"], [])
 
     def test_single_good_source_is_not_enough(self):
         m = resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "IRRELEVANT"})
         self.assertEqual(m["status"], "staking")
-
-    def test_split_sources_are_indeterminate_but_lock(self):
-        m = resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})
-        self.assertEqual(m["final_classification"], "Indeterminate")
-        self.assertIsNotNone(m["locked_source_urls"])
+        self.assertEqual(m["independent_source_count"], 1)
 
     def test_fetch_errors_and_model_errors_are_contained(self):
-        with mocked_sources({REUTERS_URL: TimeoutError("timed out"), AP_URL: "A"}):
-            m = json.loads(call(self.c, "resolve_market", self.mid, [REUTERS_URL, AP_URL]))
-        self.assertEqual(m["records"][0]["fetch_status"], "timeout")
+        m = resolve(self.c, self.mid, {REUTERS_URL: TimeoutError("timed out"), AP_URL: "A"})
+        self.assertEqual(self.votes(m), [None, 0])
         self.assertEqual(m["status"], "staking")
-
         from unittest.mock import patch
         with patch.object(gl.nondet.web, "render", side_effect=lambda url, mode="text": "Local news. " + "word " * 20), \
                 patch.object(gl.nondet, "exec_prompt", side_effect=RuntimeError("LLM down")):
-            m = json.loads(call(self.c, "resolve_market", self.mid, [REUTERS_URL, AP_URL]))
-        self.assertEqual([r["quality_flag"] for r in m["records"]], ["model_error", "model_error"])
-
-    def test_prompt_injection_text_in_source_does_not_help_without_grounding(self):
-        # Even if a hostile page makes the model claim an outcome, the quote
-        # must exist on the page and two independent domains must agree.
-        m = resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "IRRELEVANT"})
-        self.assertEqual(m["status"], "staking")
+            # AP already has recorded evidence, so submit Reuters (no vote yet) + BBC.
+            m = json.loads(call(self.c, "resolve_market", self.mid, [REUTERS_URL, BBC_URL]))
+        self.assertEqual(self.votes(m), [None, None])
+        self.assertEqual(m["recorded_source_urls"], [AP_URL])
 
 
-class ConsensusTests(unittest.TestCase):
+class ValidatorBackedEvidenceTests(unittest.TestCase):
+    """Steward request 2: everything stored as evidence must be something every
+    validator independently reproduced or verified, and the count and winner
+    must be recomputed by the contract, not taken from the leader."""
+
     def setUp(self):
         self.c = make_contract()
         self.mid = create_market(self.c)
         stake(self.c, self.mid, ALICE_ADDRESS, 0, GEN)
         open_resolution_window(self.c, self.mid)
+        self.pages = {REUTERS_URL: "A", AP_URL: "A"}
 
-    def test_validator_disagreement_changes_nothing(self):
+    def assertRejected(self, tamper=None, **kw):
         before = self.c.markets[self.mid]
-        with self.assertRaises(ConsensusFailure):
-            with mocked_sources(
-                {REUTERS_URL: "A", AP_URL: "A"},
-                leader_then_validator=[{REUTERS_URL: "A", AP_URL: "A"},
-                                       {REUTERS_URL: "B", AP_URL: "B"}],
-            ):
-                call(self.c, "resolve_market", self.mid, [REUTERS_URL, AP_URL])
-        self.assertEqual(self.c.markets[self.mid], before)
+        ok, exc = run_with_leader(self.c, self.mid, self.pages, tamper, **kw)
+        self.assertFalse(ok)
+        self.assertIsInstance(exc, ConsensusFailure)
+        self.assertEqual(self.c.markets[self.mid], before, "a rejected proposal must change nothing")
 
-    def test_validator_rejects_leader_winner_it_cannot_reproduce(self):
-        # Leader sees a decisive result; validator's fetch fails -> no winner.
-        with self.assertRaises(ConsensusFailure):
-            with mocked_sources(
-                {REUTERS_URL: "A", AP_URL: "A"},
-                leader_then_validator=[{REUTERS_URL: "A", AP_URL: "A"},
-                                       {REUTERS_URL: "A", AP_URL: TimeoutError("timed out")}],
-            ):
-                call(self.c, "resolve_market", self.mid, [REUTERS_URL, AP_URL])
-        self.assertEqual(market(self.c, self.mid)["status"], "staking")
+    def test_honest_leader_accepted(self):
+        ok, exc = run_with_leader(self.c, self.mid, self.pages)
+        self.assertTrue(ok)
+        self.assertIsNone(exc)
 
-    def test_honest_leader_and_validators_agree(self):
-        # Same decision from independently fetched pages is accepted even if
-        # audit details differ.
+    def test_leader_cannot_alter_a_quote_even_keeping_the_same_winner(self):
+        def tamper(p):
+            p["votes"][0]["quote"] = "Officials announced a landslide victory for Candidate A today."
+        self.assertRejected(tamper)
+
+    def test_leader_cannot_substitute_another_real_sentence_that_does_not_report_it(self):
+        # The sentence IS on the page, but the validator's own model says it
+        # does not report the outcome -> rejected.
+        def tamper(p):
+            p["votes"][0]["quote"] = "The city council met later in the week to discuss the budget"
+        self.assertRejected(tamper, excerpt_answer="No")
+
+    def test_leader_cannot_suppress_a_counted_source(self):
+        def tamper(p):
+            p["votes"][1] = {"url": AP_URL, "vote": None, "quote": ""}
+        self.assertRejected(tamper)
+
+    def test_leader_cannot_invent_a_vote(self):
+        self.pages = {REUTERS_URL: "A", AP_URL: "IRRELEVANT"}
+
+        def tamper(p):
+            p["votes"][1] = {"url": AP_URL, "vote": 0, "quote": ANSWERS["A"].split("QUOTE: ")[1]}
+        self.assertRejected(tamper)
+
+    def test_leader_cannot_flip_a_vote(self):
+        def tamper(p):
+            p["votes"][0]["vote"] = 1
+        self.assertRejected(tamper)
+
+    def test_leader_cannot_add_unverified_fields(self):
+        def tamper(p):
+            p["independent_source_count"] = 5
+        self.assertRejected(tamper)
+
+        def tamper_record(p):
+            p["votes"][0]["fetch_status"] = "ok"
+        self.assertRejected(tamper_record)
+
+    def test_type_confusion_rejected(self):
+        for bad in (True, 0.0, "0"):
+            def tamper(p, bad=bad):
+                p["votes"][0]["vote"] = bad
+            self.assertRejected(tamper)
+
+    def test_quote_must_be_on_the_validators_own_fetch(self):
+        # Leader fetched page A; the validator's fetch of the first source is
+        # different content, so the leader's quote is not on it.
+        self.assertRejected(leader_then_validator=[{REUTERS_URL: "A", AP_URL: "A"},
+                                                   {REUTERS_URL: "A2", AP_URL: "A"}])
+
+    def test_validator_disagreeing_on_any_source_rejects(self):
+        self.assertRejected(leader_then_validator=[{REUTERS_URL: "A", AP_URL: "A"},
+                                                   {REUTERS_URL: "A", AP_URL: TimeoutError("timed out")}])
+
+    def test_validator_rejects_non_return_result(self):
+        captured = {}
+        from unittest.mock import patch
+
+        def run(leader_fn, validator_fn, /):
+            honest = leader_fn()
+
+            class NotAReturn:
+                calldata = honest
+            captured["ok"] = validator_fn(NotAReturn())
+            raise ConsensusFailure("rejected")
+
+        with mocked_sources(self.pages):
+            with patch.object(gl.vm, "run_nondet_unsafe", side_effect=run):
+                with self.assertRaises(ConsensusFailure):
+                    call(self.c, "resolve_market", self.mid, list(self.pages))
+        self.assertFalse(captured["ok"])
+
+    def test_stored_evidence_contains_only_verified_fields(self):
+        m = resolve(self.c, self.mid, self.pages)
+        for record in m["evidence"].values():
+            self.assertEqual(set(record), {"url", "domain", "path", "vote", "quote", "attempt"})
+        for record in m["last_attempt"]:
+            self.assertEqual(set(record), {"url", "domain", "vote", "quote"})
+        self.assertNotIn("records", m)
+
+    def test_count_and_winner_are_recomputed_by_the_contract(self):
+        m = resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "A", BBC_URL: "B"})
+        self.assertEqual(m["independent_source_count"], 3)
+        self.assertEqual(m["winning_outcome_index"], 0)
+
+
+class ImmutableEvidenceTests(unittest.TestCase):
+    """Steward request 1: conflicting first evidence must not freeze a market,
+    and agreed evidence (including dissent) must never be removable or
+    rewritable. Recorded votes are immutable; later attempts add only new
+    sources from new outlets; the ledger is capped at 6 sources."""
+
+    def setUp(self):
+        self.c = make_contract()
+        self.mid = create_market(self.c)
+        stake(self.c, self.mid, ALICE_ADDRESS, 0, GEN)
+        stake(self.c, self.mid, BOB_ADDRESS, 1, GEN)
+        open_resolution_window(self.c, self.mid)
+
+    def test_steward_scenario_conflicting_first_set_can_be_recovered(self):
+        # A permissionless resolver submits two valid sources that disagree.
+        m = resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})
+        self.assertEqual((m["status"], m["final_classification"]), ("staking", "Indeterminate"))
+        self.assertEqual(m["recorded_source_urls"], sorted([REUTERS_URL, AP_URL]))
+        # Later decisive evidence can still be added: the market resolves.
+        m = resolve(self.c, self.mid, {BBC_URL: "A"})
+        self.assertEqual(m["status"], "resolved")
+        self.assertEqual(m["winning_outcome_index"], 0)
+        self.assertEqual(m["independent_source_count"], 3)
+
+    def test_no_later_attempt_can_overwrite_a_recorded_vote(self):
+        resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})
+        before = market(self.c, self.mid)["evidence"]
+        # Even if the page now reports the other outcome, it cannot be
+        # resubmitted, so its recorded vote can never change.
+        for pages in ({AP_URL: "A"}, {AP_URL: "A", BBC_URL: "A"}, {REUTERS_URL: "B", BBC_URL: "B"}):
+            with self.assertRaises(gl.vm.UserError):
+                resolve(self.c, self.mid, pages)
+        self.assertEqual(market(self.c, self.mid)["evidence"], before)
+
+    def test_contract_never_overwrites_even_if_a_recorded_url_reaches_it(self):
+        # Defense in depth: bypass the pre-fetch check and feed an agreed vote
+        # for an already-recorded URL straight into the ledger update.
+        resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})
+        from unittest.mock import patch
+        original = self.c._validate_source_urls
+
+        def no_check(mkt, urls):
+            return [(u, M.parse_source_url(u)[0], M.parse_source_url(u)[1]) for u in urls]
+
+        with patch.object(self.c, "_validate_source_urls", side_effect=no_check):
+            m = resolve(self.c, self.mid, {AP_URL: "A", BBC_URL: "A"})
+        self.assertEqual(m["evidence"][AP_URL]["vote"], 1)
+        self.assertEqual(m["evidence"][AP_URL]["attempt"], 1)
+        del original
+
+    def test_dissent_cannot_be_diluted_by_another_page_from_the_same_outlet(self):
+        resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})
+        with self.assertRaises(gl.vm.UserError):
+            resolve(self.c, self.mid, {"https://apnews.com/other": "A"})
+        with self.assertRaises(gl.vm.UserError):
+            resolve(self.c, self.mid, {"https://www.reuters.com/other": "A"})
+
+    def test_recorded_sources_are_not_refetched(self):
+        resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})
+        with mocked_sources({BBC_URL: "A"}) as state:
+            call(self.c, "resolve_market", self.mid, [BBC_URL])
+        # One fetch by the leader and one by the validator, for BBC only.
+        self.assertEqual(state["urls_seen"], 2)
+
+    def test_first_attempt_needs_two_sources_later_attempts_one(self):
+        with self.assertRaisesRegex(gl.vm.UserError, "between 2 and 6"):
+            resolve(self.c, self.mid, {REUTERS_URL: "A"})
+        resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})
+        m = resolve(self.c, self.mid, {BBC_URL: "A"})
+        self.assertEqual(m["status"], "resolved")
+
+    def test_committed_domains_are_covered_by_recorded_or_new_sources(self):
+        # Committed: reuters + apnews. Reuters counts, AP does not.
+        m = resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "IRRELEVANT"})
+        self.assertEqual(m["recorded_source_urls"], [REUTERS_URL])
+        with self.assertRaises(gl.vm.UserError):      # AP still uncovered
+            resolve(self.c, self.mid, {BBC_URL: "A"})
+        m = resolve(self.c, self.mid, {"https://apnews.com/other": "A"})
+        self.assertEqual(m["status"], "resolved")
+
+    def test_sources_without_an_agreed_vote_are_not_recorded_and_may_be_retried(self):
+        m = resolve(self.c, self.mid, {REUTERS_URL: "IRRELEVANT", AP_URL: "POLL"})
+        self.assertEqual(m["recorded_source_urls"], [])
         m = resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "A"})
         self.assertEqual(m["status"], "resolved")
 
-    def test_validator_rejects_malformed_leader_output(self):
-        leader_payload = json.dumps({"records": [], "winning_outcome_index": "0",
-                                     "independent_source_count": 2, "lock_eligible": True})
-        from _bootstrap import M
-
-        # Simulate a dishonest leader: validator must refuse it.
-        class FakeReturn(gl.vm.Return):
-            pass
-
-        with mocked_sources({REUTERS_URL: "A", AP_URL: "A"}):
-            captured = {}
-
-            def run(leader_fn, validator_fn, /):
-                captured["ok"] = validator_fn(FakeReturn(leader_payload))
-                raise ConsensusFailure("rejected")
-
-            from unittest.mock import patch
-            with patch.object(gl.vm, "run_nondet_unsafe", side_effect=run):
-                with self.assertRaises(ConsensusFailure):
-                    call(self.c, "resolve_market", self.mid, [REUTERS_URL, AP_URL])
-        self.assertFalse(captured["ok"])
-
-    def test_validator_rejects_non_return_object_even_with_valid_payload(self):
-        # An error/rollback result must never be accepted, even if it happens
-        # to carry a payload identical to an honest result.
-        honest = json.dumps({"records": [], "winning_outcome_index": 0,
-                             "independent_source_count": 2, "lock_eligible": True})
-
-        class NotAReturn:
-            calldata = honest
-
-        with mocked_sources({REUTERS_URL: "A", AP_URL: "A"}):
-            captured = {}
-
-            def run(leader_fn, validator_fn, /):
-                captured["ok"] = validator_fn(NotAReturn())
-                raise ConsensusFailure("rejected")
-
-            from unittest.mock import patch
-            with patch.object(gl.vm, "run_nondet_unsafe", side_effect=run):
-                with self.assertRaises(ConsensusFailure):
-                    call(self.c, "resolve_market", self.mid, [REUTERS_URL, AP_URL])
-        self.assertFalse(captured["ok"])
-
-    def test_validator_rejects_non_return_result(self):
-        with mocked_sources({REUTERS_URL: "A", AP_URL: "A"}):
-            captured = {}
-
-            def run(leader_fn, validator_fn, /):
-                captured["ok"] = validator_fn(object())
-                raise ConsensusFailure("rejected")
-
-            from unittest.mock import patch
-            with patch.object(gl.vm, "run_nondet_unsafe", side_effect=run):
-                with self.assertRaises(ConsensusFailure):
-                    call(self.c, "resolve_market", self.mid, [REUTERS_URL, AP_URL])
-        self.assertFalse(captured["ok"])
-
-
-class MaliciousLeaderTests(unittest.TestCase):
-    """A dishonest leader tampers with its own result. Validators must reject
-    every variant, and nothing may change."""
-
-    def setUp(self):
-        self.c = make_contract()
-        self.mid = create_market(self.c)
-        stake(self.c, self.mid, ALICE_ADDRESS, 1, GEN)
-        open_resolution_window(self.c, self.mid)
-
-    def attempt(self, tamper):
-        from unittest.mock import patch
-        verdict = {}
-
-        def run(leader_fn, validator_fn, /):
-            payload = json.loads(leader_fn())
-            tamper(payload)
-            verdict["ok"] = validator_fn(gl.vm.Return(json.dumps(payload)))
-            if verdict["ok"] is not True:
-                raise ConsensusFailure("rejected")
-            return json.dumps(payload)
-
-        before = self.c.markets[self.mid]
-        with mocked_sources({REUTERS_URL: "B", AP_URL: "B"}):
-            with patch.object(gl.vm, "run_nondet_unsafe", side_effect=run):
-                with self.assertRaises(ConsensusFailure):
-                    call(self.c, "resolve_market", self.mid, [REUTERS_URL, AP_URL])
-        self.assertFalse(verdict["ok"])
-        self.assertEqual(self.c.markets[self.mid], before)
-
-    def test_bool_winner_that_equals_real_index_is_rejected(self):
-        # True == 1 in Python; accepting it would store an unclaimable winner
-        # and lock the pot forever.
-        self.attempt(lambda p: p.__setitem__("winning_outcome_index", True))
-
-    def test_wrong_winner_rejected(self):
-        self.attempt(lambda p: p.__setitem__("winning_outcome_index", 0))
-
-    def test_suppressed_winner_rejected(self):
-        self.attempt(lambda p: p.__setitem__("winning_outcome_index", None))
-
-    def test_out_of_range_winner_rejected(self):
-        self.attempt(lambda p: p.__setitem__("winning_outcome_index", 99))
-
-    def test_float_winner_rejected(self):
-        self.attempt(lambda p: p.__setitem__("winning_outcome_index", 1.0))
-
-    def test_flipped_lock_flag_rejected(self):
-        self.attempt(lambda p: p.__setitem__("lock_eligible", False))
-
-    def test_bool_or_bad_count_rejected(self):
-        self.attempt(lambda p: p.__setitem__("independent_source_count", "2"))
-        self.attempt(lambda p: p.__setitem__("independent_source_count", True))
-
-    def test_bad_records_rejected(self):
-        self.attempt(lambda p: p.__setitem__("records", "not a list"))
-        self.attempt(lambda p: p.__setitem__("records", [1, 2]))
-
-    def test_missing_fields_rejected(self):
-        self.attempt(lambda p: p.pop("lock_eligible"))
-
-    def test_honest_result_still_accepted_and_claimable(self):
-        m = resolve(self.c, self.mid, {REUTERS_URL: "B", AP_URL: "B"})
-        self.assertEqual(m["winning_outcome_index"], 1)
-        self.assertIs(type(m["winning_outcome_index"]), int)
-        self.assertEqual(claim(self.c, self.mid, ALICE_ADDRESS), GEN)
-
-
-class ExactLockComparisonTests(unittest.TestCase):
-    def test_locked_url_with_different_path_case_rejected(self):
-        c = make_contract()
-        mid = create_market(c)
-        stake(c, mid, ALICE_ADDRESS, 0, GEN)
-        open_resolution_window(c, mid)
-        resolve(c, mid, {REUTERS_URL: "A", AP_URL: "B"})  # locks
-        swapped = REUTERS_URL.replace("/world/", "/World/")
-        with self.assertRaises(gl.vm.UserError):
-            resolve(c, mid, {swapped: "A", AP_URL: "A"})
-
-
-class SourceLockTests(unittest.TestCase):
-    def setUp(self):
-        self.c = make_contract()
-        self.mid = create_market(self.c)
-        stake(self.c, self.mid, ALICE_ADDRESS, 0, GEN)
-        open_resolution_window(self.c, self.mid)
-
-    def test_irrelevant_first_attempt_does_not_lock(self):
-        resolve(self.c, self.mid, {REUTERS_URL: "IRRELEVANT", AP_URL: "IRRELEVANT"})
-        m = resolve(self.c, self.mid, {"https://reuters.com/other": "A", "https://apnews.com/other": "A"})
-        self.assertEqual(m["status"], "resolved")
-
-    def test_locked_set_must_be_resubmitted_exactly(self):
-        resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})  # locks, indeterminate
-        with self.assertRaises(gl.vm.UserError):
-            resolve(self.c, self.mid, {REUTERS_URL: "A", "https://apnews.com/other": "A"})
-        with self.assertRaises(gl.vm.UserError):
-            resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "A", BBC_URL: "A"})
-
-    def test_locked_set_accepts_reordered_resubmission(self):
+    def test_dissent_still_blocks_a_tie(self):
         resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})
-        m = resolve(self.c, self.mid, {AP_URL: "A", REUTERS_URL: "A"})
+        m = resolve(self.c, self.mid, {BBC_URL: "IRRELEVANT"})
+        self.assertEqual(m["status"], "staking")
+        self.assertEqual(m["independent_source_count"], 2)
+
+    def test_ledger_is_capped_at_six_sources(self):
+        resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})
+        resolve(self.c, self.mid, {BBC_URL: "A", GUARDIAN_URL: "B"})
+        with self.assertRaises(gl.vm.UserError):     # 3 more would exceed 6
+            resolve(self.c, self.mid, {NPR_URL: "A", "https://www.axios.com/x": "B", "https://www.cnbc.com/x": "A"})
+        m = resolve(self.c, self.mid, {NPR_URL: "A", "https://www.axios.com/x": "B"})   # 3 vs 3
+        self.assertEqual((len(m["recorded_source_urls"]), m["status"]), (6, "staking"))
+        with self.assertRaisesRegex(gl.vm.UserError, "already has 6 recorded sources"):
+            resolve(self.c, self.mid, {"https://www.cnbc.com/x": "A"})
+        close_resolution_window(self.c, self.mid)
+        self.assertEqual(json.loads(call(self.c, "expire_market", self.mid))["status"], "refunding")
+
+    def test_decisive_result_is_final(self):
+        m = resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "A"})
         self.assertEqual(m["status"], "resolved")
-        self.assertEqual(m["resolution_attempts"], 2)
+        with self.assertRaises(gl.vm.UserError):
+            resolve(self.c, self.mid, {BBC_URL: "B", GUARDIAN_URL: "B"})
+        self.assertEqual(market(self.c, self.mid)["winning_outcome_index"], 0)
+
+    def test_attempt_number_recorded_per_evidence(self):
+        resolve(self.c, self.mid, {REUTERS_URL: "A", AP_URL: "B"})
+        m = resolve(self.c, self.mid, {BBC_URL: "A"})
+        self.assertEqual(m["evidence"][BBC_URL]["attempt"], 2)
+        self.assertEqual(m["evidence"][AP_URL]["attempt"], 1)
 
 
 class ClaimTests(unittest.TestCase):

@@ -14,6 +14,8 @@ OUTCOMES = ["Candidate A wins", "Candidate B wins", "Runoff required"]
 REUTERS_URL = "https://www.reuters.com/world/election-result"
 AP_URL = "https://apnews.com/article/election-result"
 BBC_URL = "https://www.bbc.com/news/election-result"
+GUARDIAN_URL = "https://www.theguardian.com/world/election-result"
+NPR_URL = "https://www.npr.org/election-result"
 
 
 def iso_in(seconds_from_now: float) -> str:
@@ -74,11 +76,13 @@ def market(c, mid):
 # ---------------------------------------------------------------------------
 
 A_SENTENCE = "Election officials certified that Candidate A won the mayoral race on Tuesday."
+A2_SENTENCE = "Candidate A was sworn in as mayor after the certified result on Tuesday."
 B_SENTENCE = "Election officials certified that Candidate B won the mayoral race on Tuesday."
 FILLER = " The city council met later in the week to discuss the budget and road repairs."
 
 PAGES = {
     "A": "Local news. " + A_SENTENCE + FILLER,
+    "A2": "Regional desk. " + A2_SENTENCE + FILLER,
     "B": "Local news. " + B_SENTENCE + FILLER,
     "POLL": "Local news. A new poll shows Candidate A is expected to win the mayoral race next week." + FILLER,
     "IRRELEVANT": "Local news. The city approved a new park and a bicycle lane downtown this week." + FILLER,
@@ -86,6 +90,7 @@ PAGES = {
 
 ANSWERS = {
     "A": "RELEVANCE: Relevant\nSTATUS: Confirmed\nOUTCOME: Candidate A wins\nQUOTE: " + A_SENTENCE,
+    "A2": "RELEVANCE: Relevant\nSTATUS: Confirmed\nOUTCOME: Candidate A wins\nQUOTE: " + A2_SENTENCE,
     "B": "RELEVANCE: Relevant\nSTATUS: Confirmed\nOUTCOME: Candidate B wins\nQUOTE: " + B_SENTENCE,
     "POLL": "RELEVANCE: Relevant\nSTATUS: Projected\nOUTCOME: Candidate A wins\nQUOTE: A new poll shows Candidate A is expected to win",
     "IRRELEVANT": "RELEVANCE: Irrelevant\nSTATUS: Unknown\nOUTCOME: Unclear\nQUOTE: None",
@@ -94,26 +99,20 @@ ANSWERS = {
 }
 
 
-def _kind_for_content(content):
-    for kind, page in PAGES.items():
-        if page == content:
-            return kind
-    return None
-
-
 @contextmanager
-def mocked_sources(page_by_url, answer_override=None, leader_then_validator=None):
+def mocked_sources(page_by_url, answer_override=None, leader_then_validator=None, excerpt_answer="Yes"):
     """
     page_by_url: url -> kind in PAGES (or an Exception instance to raise).
     answer_override: kind -> raw model answer, replacing ANSWERS for that page.
-    leader_then_validator: optional list of dicts {url: kind}; call i of
-        evaluate uses mapping i (leader first, then validator), to simulate a
+    leader_then_validator: optional list of {url: kind} maps; fetch round i
+        (leader = round 0, validator = round 1) uses map i, to simulate a
         validator seeing different content than the leader.
+    excerpt_answer: what a validator's model answers to EXCERPT_CHECK.
     """
     answers = dict(ANSWERS)
     if answer_override:
         answers.update(answer_override)
-    state = {"calls": 0, "urls_seen": 0}
+    state = {"calls": 0, "urls_seen": 0, "prompts": []}
     urls = list(page_by_url.keys())
 
     def render(url, mode="text"):
@@ -129,9 +128,13 @@ def mocked_sources(page_by_url, answer_override=None, leader_then_validator=None
 
     def exec_prompt(prompt, response_format="text"):
         state["calls"] += 1
+        state["prompts"].append(prompt)
         for kind, page in PAGES.items():
             if page in prompt:
-                return answers[kind]
+                answer = answers[kind]
+                if "EXCERPT_CHECK:" in prompt:
+                    answer += "\nEXCERPT_CHECK: " + excerpt_answer
+                return answer
         return "RELEVANCE: Unclear\nSTATUS: Unknown\nOUTCOME: Unclear\nQUOTE: None"
 
     with patch.object(gl.nondet.web, "render", side_effect=render), patch.object(
