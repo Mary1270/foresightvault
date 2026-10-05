@@ -285,7 +285,7 @@
     text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top;
   }
   table.evidence th{ color:var(--ink-dim); font-weight:600; font-size:11.5px; }
-  table.evidence td.url{ font-family:'IBM Plex Mono',monospace; font-size:11.5px; word-break:break-all; }
+  table.evidence td.url{ font-family:'IBM Plex Mono',monospace; font-size:11.5px; overflow-wrap:anywhere; min-width:96px; }
 
   .hero-status{
     display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:6px;
@@ -296,7 +296,9 @@
   .field-list{ display:flex; flex-direction:column; gap:6px; font-size:13px; margin:14px 0; }
   .field-list .fl-row{ display:flex; justify-content:space-between; gap:10px; border-bottom:1px dashed var(--line); padding-bottom:6px; }
   .field-list .fl-key{ color:var(--ink-dim); }
-  .field-list .fl-val{ font-family:'IBM Plex Mono',monospace; text-align:right; word-break:break-all; white-space:pre-line; }
+  .field-list .fl-val{ font-family:'IBM Plex Mono',monospace; text-align:right; overflow-wrap:anywhere; white-space:pre-line; }
+  .field-list .fl-val.links{ display:flex; flex-direction:column; align-items:flex-end; gap:6px; white-space:normal; }
+  .field-list .fl-val a, table.evidence td.url a{ color:inherit; text-decoration:underline; text-decoration-color:var(--ink-faint); text-underline-offset:3px; }
 
   footer{
     max-width:1180px; margin:0 auto; padding:24px 20px 60px;
@@ -618,6 +620,52 @@ function fieldRow(key, value){
   return makeEl('div', { className: 'fl-row' }, [
     makeEl('span', { className: 'fl-key', text: key }),
     makeEl('span', { className: 'fl-val', text: value }),
+  ]);
+}
+
+/** Human-readable local time; falls back to the raw value if unparsable. */
+function formatTime(iso){
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return String(iso);
+  try {
+    return new Date(ms).toLocaleString(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+    });
+  } catch (err) {
+    return String(iso);
+  }
+}
+
+/** Compact label for a URL: host without "www." plus a shortened path. */
+function shortUrl(url){
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, '');
+    let path = u.pathname;
+    if (path.length > 30) path = '/\u2026' + path.slice(-24);
+    return host + (path === '/' ? '' : path);
+  } catch (err) {
+    return String(url);
+  }
+}
+
+/** Link to a source page. Only https URLs become clickable; the full URL is in the tooltip. */
+function sourceLink(url){
+  const a = makeEl('a', { text: shortUrl(url) });
+  if (/^https:\/\//.test(url)) {
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+  }
+  a.title = url;
+  return a;
+}
+
+function linksRow(key, urls){
+  return makeEl('div', { className: 'fl-row' }, [
+    makeEl('span', { className: 'fl-key', text: key }),
+    makeEl('span', { className: 'fl-val links' }, urls.map(sourceLink)),
   ]);
 }
 
@@ -982,14 +1030,14 @@ function renderMarket(record){
   const fields = document.getElementById('marketFields');
   clearChildren(fields);
   fields.appendChild(fieldRow('Market id', record.market_id));
-  fields.appendChild(fieldRow('Staking closes', record.staking_deadline));
-  fields.appendChild(fieldRow('Resolution opens', record.resolution_deadline));
-  fields.appendChild(fieldRow('Resolution window closes', record.resolution_window_closes_at));
+  fields.appendChild(fieldRow('Staking closes', formatTime(record.staking_deadline)));
+  fields.appendChild(fieldRow('Resolution opens', formatTime(record.resolution_deadline)));
+  fields.appendChild(fieldRow('Resolution window closes', formatTime(record.resolution_window_closes_at)));
   if (record.final_classification) {
     fields.appendChild(fieldRow('Last result', record.final_classification));
   }
   if (record.recorded_source_urls && record.recorded_source_urls.length) {
-    fields.appendChild(fieldRow('Recorded sources', record.recorded_source_urls.join('\n')));
+    fields.appendChild(linksRow('Recorded sources', record.recorded_source_urls));
     fields.appendChild(fieldRow('Source slots left', String(6 - record.recorded_source_urls.length)));
   }
   if (record.independent_source_count) {
@@ -1006,7 +1054,7 @@ function renderMarket(record){
     const rowClass = 'outcome-row' + (record.winning_outcome_index === idx ? ' is-winner' : '');
     const stakers = (record.outcome_staker_counts || [])[idx] || 0;
     const head = makeEl('div', { className: 'outcome-row-head' }, [
-      makeEl('span', { className: 'outcome-row-label', text: `${label} · ${stakers} staker${stakers === 1 ? '' : 's'}` }),
+      makeEl('span', { className: 'outcome-row-label', text: `${label}${record.winning_outcome_index === idx ? ' \u2713 winner' : ''} \u00b7 ${stakers} staker${stakers === 1 ? '' : 's'}` }),
       makeEl('span', { className: 'outcome-row-amt', text: `${weiToGenString(amount)} GEN (${pct}%)` }),
     ]);
     const fill = makeEl('div', { className: 'outcome-bar-fill' });
@@ -1040,7 +1088,7 @@ function renderMarket(record){
     ]));
     for (const e of evidence) {
       evidenceTable.appendChild(makeEl('tr', {}, [
-        makeEl('td', { className: 'url', text: e.url }),
+        makeEl('td', { className: 'url' }, [sourceLink(e.url)]),
         makeEl('td', { text: record.outcomes[e.vote] ?? '—' }),
         makeEl('td', { className: 'quote', text: e.quote || '—' }),
         makeEl('td', { text: String(e.attempt) }),
@@ -1048,7 +1096,7 @@ function renderMarket(record){
     }
     for (const r of notCounted) {
       evidenceTable.appendChild(makeEl('tr', {}, [
-        makeEl('td', { className: 'url', text: r.url }),
+        makeEl('td', { className: 'url' }, [sourceLink(r.url)]),
         makeEl('td', { text: 'Not counted' }),
         makeEl('td', { className: 'quote', text: 'No confirmed, quoted outcome agreed by validators in the last attempt' }),
         makeEl('td', { text: String(record.resolution_attempts) }),
